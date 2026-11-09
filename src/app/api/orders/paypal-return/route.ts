@@ -23,15 +23,14 @@ export async function GET(request: Request): Promise<NextResponse> {
   const token = PayPalTokenSchema.safeParse(new URL(request.url).searchParams.get("token"));
   if (!token.success) return withNotice("order_not_found");
 
-  const deps = buildOrderDeps();
-  const outcome = await handlePayPalReturn(token.data, sessionId, deps);
+  // The service logs each step (including a failed capture) to the agent-activity log.
+  const outcome = await handlePayPalReturn(token.data, sessionId, buildOrderDeps());
   switch (outcome.kind) {
     case "ok":
       return redirectTo(`/orders/${outcome.orderId}${outcome.scored ? "" : "?notice=scoring_failed"}`);
     case "cancelled":
       return withNotice("order_cancelled");
     case "capture_failed":
-      deps.onWarning?.(`capture failed: ${outcome.message}`);
       return withNotice("capture_failed");
     case "not_found":
       return withNotice("order_not_found");

@@ -192,18 +192,26 @@
 > - **Not verified live (the item above stays open):** the buyer approving in a sandbox buyer account, then a successful capture and scoring. That needs a person in a browser, and the login page and order form land in M1-11. `addTracking`'s path and body are also still unchecked against a real response.
 > - **Decisions:** `buyer_email` is NOT NULL but PayPal only reveals the payer's email at capture, so a created order holds `pending@paypal.invalid` (reserved TLD) until then. Only a capture whose status is `COMPLETED` counts as paid. `buyer_is_first_time` is derived at capture from earlier captured/shipped orders with the same email. Capture sends `PayPal-Request-Id: capture-<orderId>` so a retry after a lost response cannot capture twice. Two concurrent returns are resolved by a conditional `created -> captured` update; the loser does not score. If PayPal is not used (Demo Mode, no credentials, or a `PayPalError`), creation makes an `is_demo` order that is already `captured` and scored (buyer `demo.buyer@example.com`, first-time fixed true) and the API returns `approvalUrl: null, isDemo: true, reason`. The item name is not stored locally; the Evidence Vault (M3) reads it from PayPal `getOrder`.
 > - **Known limit:** `sid` is new on every sign-in, so an order left `created` by an expired session cannot be captured after logging in again.
-> - **Handed on:** M1-08 binds the activity logger into `runtime.ts` (`onFallback`, `onWarning` are `console.warn` placeholders) and logs the capture/score steps; M1-09 supplies `OrderAiHooks`; M1-10 can reuse `ingestAndScore` to score a captured-but-unscored order on read.
+> - **Handed on:** M1-08 bound the activity logger (`deps.log`, no more `console.warn` placeholders) and logs each step; M1-09 supplies `OrderAiHooks`; M1-10 can reuse `ingestAndScore` to score a captured-but-unscored order on read.
 > - **Build fix (separate commit):** `next build` had been failing since M1-07 because webpack turned `new URL('.', import.meta.url)` in `postgres/src/errors.js` into an asset and Terser could not parse it. `postgres` is now in `serverComponentsExternalPackages` (`next.config.mjs`). The build passes with all five API routes.
 
 ---
 
 ### M1-08 · Agent Activity logger
 
-- [ ] `src/lib/activity/logger.ts`:
+- [x] `src/lib/activity/logger.ts`:
   - `logActivity(meta: ActivityMeta): Promise<void>` — inserts to `agent_activity`
   - PII scrub: replace email local-part with `***`
-- [ ] Export `ActivityMeta` type
-- [ ] Bind the logger into the order flow: `src/lib/orders/runtime.ts` (`onFallback`, `onWarning`), plus a `rule_engine` row for scoring and a `paypal_api` row for create/capture
+- [x] Export `ActivityMeta` type
+- [x] Bind the logger into the order flow: `src/lib/orders/runtime.ts` passes `logActivity` as `deps.log`; the service logs a `paypal_api` row for create and capture (success, error, or `simulated` for the Demo Mode fallback), a `rule_engine` row for scoring, an `llm_call` error row if an AI hook throws, and a `merchant_action` row for cancel. Each row is written after its order exists (`ref_order_id` is a foreign key)
+
+> M1-08 notes (25 new tests; 235 in total):
+>
+> - `src/lib/activity/pii.ts`: `scrubEmails` (keeps the domain, replaces the local part with `***`, Unicode-aware, linear time) and `summarize` (scrub, collapse whitespace, cap at 500 characters; scrubs before cutting, and bounds its input at a word boundary so a cut can never leave half an email). `logger.ts`: `toActivityRow`, `createActivityLogger(insert)` (testable without a database) and the bound `logActivity`.
+> - Logging never throws. A failed write is reported as `could not write an activity row (code NNNNN)`; only the Postgres error code is read, never the message, because it can echo row values. Drizzle wraps the driver error, so the code is read from `err.cause.code` as well (a live check found this: the first version lost the code).
+> - `LlmActivityEntry` (from `callWithFallback`) is assignable to `ActivityMeta`, checked at compile time, so M1-09 can pass `logActivity` straight in as `LlmDeps.logActivity`.
+> - Checked live against Supabase: a row is written with the email scrubbed and whitespace collapsed; a foreign-key violation is swallowed and reported by code only; test rows removed afterwards.
+> - The order flow replaced its `onFallback` / `onWarning` placeholders with the single `deps.log`. The payer's email, item name and approval URL are never put in a summary.
 
 ---
 

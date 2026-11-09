@@ -3,10 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const getSessionId = vi.fn();
 const handlePayPalReturn = vi.fn();
 const handlePayPalCancel = vi.fn();
-const onWarning = vi.fn();
 
 vi.mock("@/lib/session", () => ({ getSessionId: () => getSessionId() }));
-vi.mock("@/lib/orders/runtime", () => ({ buildOrderDeps: () => ({ onWarning }) }));
+vi.mock("@/lib/orders/runtime", () => ({ buildOrderDeps: () => ({}) }));
 vi.mock("@/lib/orders/service", () => ({
   handlePayPalReturn: (...args: unknown[]) => handlePayPalReturn(...args),
   handlePayPalCancel: (...args: unknown[]) => handlePayPalCancel(...args),
@@ -25,7 +24,6 @@ beforeEach(() => {
   getSessionId.mockReset().mockResolvedValue("sid-1");
   handlePayPalReturn.mockReset();
   handlePayPalCancel.mockReset();
-  onWarning.mockReset();
 });
 
 describe("GET /api/orders/paypal-return", () => {
@@ -56,11 +54,11 @@ describe("GET /api/orders/paypal-return", () => {
     expect(location(await call(returnGet, "?token=ABC123"))).toBe(`${BASE}/orders/o-1?notice=scoring_failed`);
   });
 
-  it("redirects to the list with a notice, and logs only the safe message, when PayPal refuses the capture", async () => {
-    handlePayPalReturn.mockResolvedValue({ kind: "capture_failed", orderId: "o-1", message: "PayPal POST failed with HTTP 422" });
+  it("redirects to the list with a notice, and does not put PayPal's message in the URL, when PayPal refuses the capture", async () => {
+    handlePayPalReturn.mockResolvedValue({ kind: "capture_failed", orderId: "o-1", message: "PayPal POST failed with HTTP 422 debug_id abc" });
     const res = await call(returnGet, "?token=ABC123");
     expect(location(res)).toBe(`${BASE}/orders?notice=capture_failed`);
-    expect(onWarning).toHaveBeenCalledWith("capture failed: PayPal POST failed with HTTP 422");
+    expect(location(res)).not.toContain("422");
   });
 
   it("reports a cancelled order and an unknown order", async () => {

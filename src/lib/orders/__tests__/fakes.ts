@@ -1,5 +1,6 @@
 import { vi, type Mock } from "vitest";
 import type { NewOrder, Order } from "@/db/schema";
+import type { ActivityMeta } from "@/lib/activity/logger";
 import type { PayPalClient } from "@/lib/paypal";
 import { DEFAULT_SIGNAL_WEIGHTS } from "@/lib/scoring";
 import type { OrderDeps, OrdersRepo } from "../types";
@@ -139,6 +140,23 @@ export function captureResponse(overrides: { status?: string; email?: string | n
     status: overrides.status ?? "COMPLETED",
     purchase_units: [{ payments: { captures: [{ id: "CAPTURE-1", status: "COMPLETED" }] } }],
     payer: overrides.email === null ? {} : { email_address: overrides.email ?? "buyer@example.com" },
+  };
+}
+
+/**
+ * A fake activity logger. Like the real agent_activity table it has a foreign key to orders, so it
+ * fails if a step is logged for an order that does not exist yet.
+ */
+export function createLogRecorder(repo: FakeRepo): { log: NonNullable<OrderDeps["log"]>; entries: ActivityMeta[] } {
+  const entries: ActivityMeta[] = [];
+  return {
+    entries,
+    log: async (meta) => {
+      if (meta.refOrderId && !repo.rows.has(meta.refOrderId)) {
+        throw new Error(`foreign key violation: order ${meta.refOrderId} does not exist yet`);
+      }
+      entries.push(meta);
+    },
   };
 }
 

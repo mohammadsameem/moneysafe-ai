@@ -11,6 +11,7 @@ import {
 import type { CreateOrderRequest } from "../schemas";
 import type { OrderAiHooks } from "../types";
 import {
+  createLogRecorder,
   BASE_URL,
   CREATE_RESPONSE,
   OTHER_SESSION,
@@ -75,16 +76,17 @@ describe("createSandboxOrder", () => {
 
   it("creates a scored, clearly marked demo order when there are no PayPal credentials", async () => {
     const repo = createFakeRepo();
-    const onFallback = vi.fn();
+    const { log, entries } = createLogRecorder(repo);
 
     const outcome = await createSandboxOrder(
       input({ amountUsd: 300, billingCountry: "US", shippingCountry: "IN" }),
       SESSION,
-      makeDeps({ repo, paypal: null, onFallback }),
+      makeDeps({ repo, paypal: null, log }),
     );
 
     expect(outcome).toEqual({ kind: "demo", orderId: ORDER_ID, reason: "no_credentials" });
-    expect(onFallback).toHaveBeenCalledWith({ reason: "no_credentials", message: undefined });
+    expect(entries.map((e) => `${e.toolName}:${e.status}`)).toEqual(["create_order:simulated", "score_order:success"]);
+    expect(entries[0]?.outputSummary).toContain("Demo Mode (no_credentials)");
     const row = repo.rows.get(ORDER_ID);
     expect(row).toMatchObject({
       isDemo: true,
@@ -113,12 +115,13 @@ describe("createSandboxOrder", () => {
   it("falls back to a demo order when the sandbox is unreachable, and reports why", async () => {
     const paypal = createFakePayPal({ "POST /v2/checkout/orders": new PayPalError("PayPal could not be reached") });
     const repo = createFakeRepo();
-    const onFallback = vi.fn();
+    const { log, entries } = createLogRecorder(repo);
 
-    const outcome = await createSandboxOrder(input(), SESSION, makeDeps({ repo, paypal, onFallback }));
+    const outcome = await createSandboxOrder(input(), SESSION, makeDeps({ repo, paypal, log }));
 
     expect(outcome).toEqual({ kind: "demo", orderId: ORDER_ID, reason: "paypal_error" });
-    expect(onFallback).toHaveBeenCalledWith({ reason: "paypal_error", message: "PayPal could not be reached" });
+    expect(entries[0]).toMatchObject({ toolName: "create_order", status: "simulated" });
+    expect(entries[0]?.outputSummary).toContain("PayPal could not be reached");
     expect(repo.rows.get(ORDER_ID)).toMatchObject({ isDemo: true, paypalOrderId: null });
   });
 
@@ -281,13 +284,13 @@ describe("handlePayPalReturn", () => {
     const repo = createFakeRepo([created()]);
     repo.failWeightsLookup();
     const paypal = createFakePayPal({ "POST /v2/checkout/orders/PAYPAL-ORDER-1/capture": captureResponse() });
-    const onWarning = vi.fn();
+    const { log, entries } = createLogRecorder(repo);
 
-    const outcome = await handlePayPalReturn("PAYPAL-ORDER-1", SESSION, makeDeps({ repo, paypal, onWarning }));
+    const outcome = await handlePayPalReturn("PAYPAL-ORDER-1", SESSION, makeDeps({ repo, paypal, log }));
 
     expect(outcome).toEqual({ kind: "ok", orderId: ORDER_ID, scored: false });
-    expect(onWarning).toHaveBeenCalledTimes(1);
-    expect(onWarning.mock.calls[0]?.[0]).not.toContain("connection lost");
+    expect(entries.map((e) => `${e.toolName}:${e.status}`)).toEqual(["capture_order:success", "score_order:error"]);
+    expect(JSON.stringify(entries)).not.toContain("connection lost"); // the database error text is never logged
     expect(repo.rows.get(ORDER_ID)).toMatchObject({ status: "captured", riskScore: null });
   });
 });
@@ -394,13 +397,17 @@ describe("ingestAndScore", () => {
     it("keeps the saved score when an AI hook throws", async () => {
       const ai = hooks({ explainRisk: vi.fn(async () => { throw new Error("hook bug"); }) });
       const repo = createFakeRepo([paid({ amountUsd: 300 })]);
-      const onWarning = vi.fn();
+      const { log, entries } = createLogRecorder(repo);
 
-      const result = await ingestAndScore(paid({ amountUsd: 300 }), SESSION, makeDeps({ repo, ai, onWarning }));
+      const result = await ingestAndScore(paid({ amountUsd: 300 }), SESSION, makeDeps({ repo, ai, log }));
 
       expect(result).toMatchObject({ riskScore: 40, aiExplanation: null });
       expect(repo.rows.get(ORDER_ID)?.riskScore).toBe(40);
-      expect(onWarning).toHaveBeenCalledTimes(1);
+      expect(entries.map((e) => `${e.stepType}:${e.toolName}:${e.status}`)).toEqual([
+        "rule_engine:score_order:success",
+        "llm_call:order_ai_enrichment:error",
+      ]);
+      expect(JSON.stringify(entries)).not.toContain("hook bug");
     });
   });
 
@@ -408,5 +415,108 @@ describe("ingestAndScore", () => {
     const repo = createFakeRepo([paid({ amountUsd: 300 })]);
     await ingestAndScore(paid({ amountUsd: 300 }), SESSION, makeDeps({ repo }));
     expect(repo.rows.get(ORDER_ID)).toMatchObject({ riskScore: 40, aiExplanation: null, verificationDraft: null, usedFallback: false });
+  });
+});
+
+describe("agent activity log", () => {
+  const unpaid = (overrides = {}) => makeOrder({ id: ORDER_ID, amountUsd: 300, ...overrides });
+  const captureKey = "POST /v2/checkout/orders/PAYPAL-ORDER-1/capture";
+
+  it("logs a live create as one paypal_api step for the new order and session, without the item name or approval URL", async () => {
+    const repo = createFakeRepo();
+    const { log, entries } = createLogRecorder(repo);
+    const paypal = createFakePayPal({ "POST /v2/checkout/orders": CREATE_RESPONSE });
+
+    await createSandboxOrder(input({ itemName: "Secret Gizmo" }), SESSION, makeDeps({ repo, paypal, log }));
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      stepType: "paypal_api",
+      toolName: "create_order",
+      status: "success",
+      refOrderId: ORDER_ID,
+      sessionId: SESSION,
+    });
+    const text = JSON.stringify(entries);
+    expect(text).not.toContain("Secret Gizmo");
+    expect(text).not.toContain("checkoutnow");
+  });
+
+  it("logs capture then scoring, and never writes the payer's email", async () => {
+    const repo = createFakeRepo([unpaid()]);
+    const { log, entries } = createLogRecorder(repo);
+    const paypal = createFakePayPal({ [captureKey]: captureResponse({ email: "buyer@example.com" }) });
+
+    await handlePayPalReturn("PAYPAL-ORDER-1", SESSION, makeDeps({ repo, paypal, log }));
+
+    expect(entries.map((e) => `${e.stepType}:${e.toolName}:${e.status}`)).toEqual([
+      "paypal_api:capture_order:success",
+      "rule_engine:score_order:success",
+    ]);
+    expect(entries[1]?.outputSummary).toBe("score 40 -> verify; active signals: first_time_high_value, high_relative_value");
+    expect(JSON.stringify(entries)).not.toContain("buyer@example.com");
+  });
+
+  it("logs a refused capture as an error with PayPal's safe message", async () => {
+    const repo = createFakeRepo([unpaid()]);
+    const { log, entries } = createLogRecorder(repo);
+    const paypal = createFakePayPal({ [captureKey]: new PayPalError("PayPal POST capture failed with HTTP 422 (ORDER_NOT_APPROVED)", 422) });
+
+    await handlePayPalReturn("PAYPAL-ORDER-1", SESSION, makeDeps({ repo, paypal, log }));
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ toolName: "capture_order", status: "error", refOrderId: ORDER_ID });
+    expect(entries[0]?.outputSummary).toBe("PayPal POST capture failed with HTTP 422 (ORDER_NOT_APPROVED)");
+  });
+
+  it("logs a capture that is not COMPLETED as an error", async () => {
+    const repo = createFakeRepo([unpaid()]);
+    const { log, entries } = createLogRecorder(repo);
+    const paypal = createFakePayPal({ [captureKey]: captureResponse({ status: "PAYER_ACTION_REQUIRED" }) });
+
+    await handlePayPalReturn("PAYPAL-ORDER-1", SESSION, makeDeps({ repo, paypal, log }));
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ toolName: "capture_order", status: "error" });
+  });
+
+  it("logs a cancel as a merchant_action, and logs nothing when nothing changed", async () => {
+    const repo = createFakeRepo([unpaid()]);
+    const { log, entries } = createLogRecorder(repo);
+    const deps = makeDeps({ repo, log });
+
+    await handlePayPalCancel("PAYPAL-ORDER-1", OTHER_SESSION, deps); // not this session's order
+    expect(entries).toHaveLength(0);
+
+    await handlePayPalCancel("PAYPAL-ORDER-1", SESSION, deps);
+    expect(entries.map((e) => `${e.stepType}:${e.toolName}:${e.status}`)).toEqual(["merchant_action:cancel_order:success"]);
+
+    await handlePayPalCancel("PAYPAL-ORDER-1", SESSION, deps); // repeat is a no-op
+    expect(entries).toHaveLength(1);
+  });
+
+  it("logs nothing for a return that finds no order of the caller's", async () => {
+    const repo = createFakeRepo([unpaid()]);
+    const { log, entries } = createLogRecorder(repo);
+    await handlePayPalReturn("PAYPAL-ORDER-1", OTHER_SESSION, makeDeps({ repo, log }));
+    expect(entries).toHaveLength(0);
+  });
+
+  it("a logger that throws changes no outcome", async () => {
+    const failing = async () => {
+      throw new Error("log table is down");
+    };
+
+    const createRepo = createFakeRepo();
+    const paypalCreate = createFakePayPal({ "POST /v2/checkout/orders": CREATE_RESPONSE });
+    await expect(createSandboxOrder(input(), SESSION, makeDeps({ repo: createRepo, paypal: paypalCreate, log: failing }))).resolves.toMatchObject({ kind: "paypal" });
+
+    const returnRepo = createFakeRepo([unpaid()]);
+    const paypalCapture = createFakePayPal({ [captureKey]: captureResponse() });
+    await expect(handlePayPalReturn("PAYPAL-ORDER-1", SESSION, makeDeps({ repo: returnRepo, paypal: paypalCapture, log: failing }))).resolves.toEqual({ kind: "ok", orderId: ORDER_ID, scored: true });
+    expect(returnRepo.rows.get(ORDER_ID)).toMatchObject({ status: "captured", riskScore: 40 });
+
+    const cancelRepo = createFakeRepo([unpaid()]);
+    await expect(handlePayPalCancel("PAYPAL-ORDER-1", SESSION, makeDeps({ repo: cancelRepo, log: failing }))).resolves.toEqual({ kind: "cancelled", orderId: ORDER_ID });
   });
 });

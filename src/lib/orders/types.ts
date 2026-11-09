@@ -1,5 +1,6 @@
 import type { NewOrder, Order, VerificationDraft } from "@/db/schema";
-import type { DemoFallbackOptions, PayPalClient } from "@/lib/paypal";
+import type { ActivityMeta } from "@/lib/activity/logger";
+import type { PayPalClient } from "@/lib/paypal";
 import type { SignalWeightValues } from "@/lib/scoring";
 
 export type OrderStatus = Order["status"];
@@ -47,9 +48,11 @@ export interface OrderDeps {
   /** The app's public origin, e.g. https://moneysafe.example. Used for PayPal return/cancel URLs. */
   appBaseUrl: string;
   ai?: OrderAiHooks;
-  /** Called when order creation falls back to a demo order. Bind to the activity logger. */
-  onFallback?: DemoFallbackOptions["onFallback"];
-  /** Called with a short, secret-free message when a non-fatal step fails. */
-  onWarning?: (message: string) => void;
+  /**
+   * Agent-activity logger (REQ-AA-01). Every step of the flow reports through it, including the
+   * Demo Mode fallback and non-fatal failures. Summaries must hold no secrets; the real logger
+   * also scrubs emails. A failure inside it never changes the outcome.
+   */
+  log?: (meta: ActivityMeta) => Promise<void>;
   newId?: () => string;
 }

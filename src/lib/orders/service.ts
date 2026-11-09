@@ -6,10 +6,12 @@
  *   handlePayPalReturn   GET  /api/orders/paypal-return -> capture, store capture id, score
  *   handlePayPalCancel   GET  /api/orders/paypal-cancel -> status "cancelled"
  *
- * All I/O is injected (OrderDeps), so every rule here is tested offline.
+ * All I/O is injected (OrderDeps), so every rule here is tested offline. Every step is reported
+ * to the agent-activity log through `deps.log`; summaries hold ids, amounts and signal names only.
  */
 import { randomUUID } from "node:crypto";
 import type { NewOrder, Order } from "@/db/schema";
+import type { ActivityMeta } from "@/lib/activity/logger";
 import {
   captureOrder,
   createOrder,
@@ -31,6 +33,29 @@ export const PAYPAL_RETURN_PATH = "/api/orders/paypal-return";
 export const PAYPAL_CANCEL_PATH = "/api/orders/paypal-cancel";
 
 // ---------------------------------------------------------------------------
+// Activity logging
+// ---------------------------------------------------------------------------
+
+type Step = Pick<ActivityMeta, "stepType" | "toolName" | "inputSummary" | "outputSummary" | "status">;
+
+/**
+ * Report one step. `refOrderId` must be an order that already exists (agent_activity has a foreign
+ * key to it), so callers log after the insert. A failing logger never changes the outcome.
+ */
+async function record(
+  deps: OrderDeps,
+  where: { sessionId: string | null; refOrderId: string },
+  step: Step,
+  startedAt: number,
+): Promise<void> {
+  try {
+    await deps.log?.({ ...where, ...step, durationMs: Date.now() - startedAt });
+  } catch {
+    /* logging is best effort */
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Ingest + score
 // ---------------------------------------------------------------------------
 
@@ -42,6 +67,8 @@ export const PAYPAL_CANCEL_PATH = "/api/orders/paypal-cancel";
 export async function ingestAndScore(order: Order, sessionId: string | null, deps: OrderDeps): Promise<Order> {
   if (order.riskScore !== null) return order;
 
+  const started = Date.now();
+  const where = { sessionId, refOrderId: order.id };
   const [baselineAvgUsd, weights] = await Promise.all([deps.repo.getBaselineAvgUsd(), deps.repo.getActiveWeights()]);
   if (!Number.isFinite(baselineAvgUsd) || baselineAvgUsd <= 0) {
     throw new Error("settings.merchant_avg_order_value_usd must be a positive number");
@@ -49,15 +76,30 @@ export async function ingestAndScore(order: Order, sessionId: string | null, dep
 
   const signals = evaluateSignals(order, weights.values, baselineAvgUsd);
   const riskScore = computeRiskScore(signals);
+  const verdict = toVerdict(riskScore);
   let scored = await deps.repo.updateOrder(order.id, {
     riskScore,
-    verdict: toVerdict(riskScore),
+    verdict,
     signalBreakdown: signals,
     weightsId: weights.id,
   });
+  const active = signals.filter((s) => s.active).map((s) => s.signal);
+  await record(
+    deps,
+    where,
+    {
+      stepType: "rule_engine",
+      toolName: "score_order",
+      inputSummary: `amount=${order.amountUsd} ${order.currency} shipping=${order.shippingMethod} ${order.billingCountry}->${order.shippingCountry} attempts=${order.paymentAttemptCount}`,
+      outputSummary: `score ${riskScore} -> ${verdict}; active signals: ${active.length > 0 ? active.join(", ") : "none"}`,
+      status: "success",
+    },
+    started,
+  );
 
   if (!deps.ai) return scored;
   const ctx = { sessionId };
+  const aiStarted = Date.now();
   const patch: Partial<NewOrder> = {};
   try {
     if (scored.riskScore !== null && scored.riskScore >= 1) {
@@ -74,7 +116,18 @@ export async function ingestAndScore(order: Order, sessionId: string | null, dep
     if (Object.keys(patch).length > 0) scored = await deps.repo.updateOrder(order.id, patch);
   } catch {
     // The score is already saved. A failing AI step must never undo or block the order.
-    deps.onWarning?.("AI enrichment failed; the order keeps its rule-based score");
+    await record(
+      deps,
+      where,
+      {
+        stepType: "llm_call",
+        toolName: "order_ai_enrichment",
+        inputSummary: `order scored ${riskScore} -> ${verdict}`,
+        outputSummary: "AI enrichment failed unexpectedly; the order keeps its rule-based score",
+        status: "error",
+      },
+      aiStarted,
+    );
   }
   return scored;
 }
@@ -95,7 +148,11 @@ export async function createSandboxOrder(
 ): Promise<CreateOrderOutcome> {
   const id = deps.newId?.() ?? randomUUID();
   const paypal = deps.paypal;
+  const started = Date.now();
+  const where = { sessionId, refOrderId: id };
+  const inputSummary = `create sandbox order amount=${input.amountUsd} USD shipping=${input.shippingMethod} ${input.billingCountry}->${input.shippingCountry}`;
 
+  let fallbackMessage: string | undefined;
   const live = await withDemoFallback<CreatedOrder | null>(
     paypal
       ? () =>
@@ -108,7 +165,12 @@ export async function createSandboxOrder(
           })
       : null,
     () => null,
-    { demoMode: deps.demoMode, onFallback: deps.onFallback },
+    {
+      demoMode: deps.demoMode,
+      onFallback: ({ message }) => {
+        fallbackMessage = message;
+      },
+    },
   );
 
   const shared = {
@@ -132,11 +194,18 @@ export async function createSandboxOrder(
       status: "created",
       isDemo: false,
     });
+    await record(
+      deps,
+      where,
+      { stepType: "paypal_api", toolName: "create_order", inputSummary, outputSummary: "PayPal order created; waiting for the buyer to approve", status: "success" },
+      started,
+    );
     return { kind: "paypal", orderId: id, approvalUrl: live.data.approvalUrl };
   }
 
   // PayPal was not used (Demo Mode, no credentials, or the sandbox failed): keep the demo moving
   // with a clearly marked demo order that is already "paid" and scored like any other.
+  const reason = live.reason ?? "paypal_error";
   const demo = await deps.repo.insertOrder({
     ...shared,
     paypalOrderId: null,
@@ -145,8 +214,20 @@ export async function createSandboxOrder(
     status: "captured",
     isDemo: true,
   });
+  await record(
+    deps,
+    where,
+    {
+      stepType: "paypal_api",
+      toolName: "create_order",
+      inputSummary,
+      outputSummary: `Demo Mode (${reason})${fallbackMessage ? `: ${fallbackMessage}` : ""}; created a demo order instead of a PayPal order`,
+      status: "simulated",
+    },
+    started,
+  );
   await ingestAndScore(demo, sessionId, deps);
-  return { kind: "demo", orderId: id, reason: live.reason ?? "paypal_error" };
+  return { kind: "demo", orderId: id, reason };
 }
 
 // ---------------------------------------------------------------------------
@@ -174,9 +255,19 @@ export async function handlePayPalReturn(
   // Already captured (a page refresh, or a double click): do not capture again.
   if (order.status !== "created") return finish(order, sessionId, deps);
 
-  if (!deps.paypal) {
-    return { kind: "capture_failed", orderId: order.id, message: "PayPal credentials are not configured" };
-  }
+  const started = Date.now();
+  const where = { sessionId, refOrderId: order.id };
+  const failed = async (message: string): Promise<ReturnOutcome> => {
+    await record(
+      deps,
+      where,
+      { stepType: "paypal_api", toolName: "capture_order", inputSummary: "capture after buyer approval", outputSummary: message, status: "error" },
+      started,
+    );
+    return { kind: "capture_failed", orderId: order.id, message };
+  };
+
+  if (!deps.paypal) return failed("PayPal credentials are not configured");
 
   let captured;
   try {
@@ -184,11 +275,9 @@ export async function handlePayPalReturn(
     captured = await captureOrder(deps.paypal, paypalOrderId, `capture-${order.id}`);
   } catch (err) {
     if (!(err instanceof PayPalError)) throw err;
-    return { kind: "capture_failed", orderId: order.id, message: err.message };
+    return failed(err.message);
   }
-  if (captured.status !== "COMPLETED") {
-    return { kind: "capture_failed", orderId: order.id, message: `PayPal order status is ${captured.status}, not COMPLETED` };
-  }
+  if (captured.status !== "COMPLETED") return failed(`PayPal order status is ${captured.status}, not COMPLETED`);
 
   const buyerEmail = captured.payerEmail ?? order.buyerEmail;
   const buyerIsFirstTime = !(await deps.repo.hasEarlierPaidOrder(buyerEmail, order.id));
@@ -204,16 +293,41 @@ export async function handlePayPalReturn(
     const current = await deps.repo.findById(order.id);
     return current ? { kind: "ok", orderId: current.id, scored: true } : { kind: "not_found" };
   }
+  await record(
+    deps,
+    where,
+    {
+      stepType: "paypal_api",
+      toolName: "capture_order",
+      inputSummary: "capture after buyer approval",
+      outputSummary: `COMPLETED; capture id stored; payer email ${captured.payerEmail ? "received" : "not provided"}; ${buyerIsFirstTime ? "first-time" : "returning"} buyer`,
+      status: "success",
+    },
+    started,
+  );
   return finish(updated, sessionId, deps);
 }
 
 /** Score a paid order if it is not scored yet. A scoring failure is reported, not thrown. */
 async function finish(order: Order, sessionId: string, deps: OrderDeps): Promise<ReturnOutcome> {
+  const started = Date.now();
   try {
     await ingestAndScore(order, sessionId, deps);
     return { kind: "ok", orderId: order.id, scored: true };
   } catch {
-    deps.onWarning?.("scoring failed after capture; the order is captured but not scored");
+    // Static text only: a database error message can echo row values.
+    await record(
+      deps,
+      { sessionId, refOrderId: order.id },
+      {
+        stepType: "rule_engine",
+        toolName: "score_order",
+        inputSummary: "score after capture",
+        outputSummary: "scoring failed; the order is captured but not scored",
+        status: "error",
+      },
+      started,
+    );
     return { kind: "ok", orderId: order.id, scored: false };
   }
 }
@@ -233,6 +347,14 @@ export async function handlePayPalCancel(
   if (!order || order.sessionId !== sessionId) return { kind: "not_found" };
   if (order.status === "cancelled") return { kind: "cancelled", orderId: order.id };
   // Only an order that has not been paid can be cancelled; a paid order is left alone.
+  const started = Date.now();
   const updated = await deps.repo.transitionStatus(order.id, "created", { status: "cancelled" });
-  return updated ? { kind: "cancelled", orderId: order.id } : { kind: "not_cancellable", orderId: order.id };
+  if (!updated) return { kind: "not_cancellable", orderId: order.id };
+  await record(
+    deps,
+    { sessionId, refOrderId: order.id },
+    { stepType: "merchant_action", toolName: "cancel_order", inputSummary: "buyer cancelled at PayPal", outputSummary: "order marked cancelled", status: "success" },
+    started,
+  );
+  return { kind: "cancelled", orderId: order.id };
 }
