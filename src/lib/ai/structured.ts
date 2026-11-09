@@ -51,6 +51,11 @@ export interface LlmAttempt {
   durationMs: number;
   /** "ok", "HTTP 429", "timeout", "network error", "validation failed", ... */
   detail: string;
+  /**
+   * On success: "tool_call" when the provider returned the pinned tool call, "content" when it
+   * answered in message text instead (JSON retry, or a provider that ignored tool_choice).
+   */
+  via?: "tool_call" | "content";
 }
 
 export interface StructuredOptions<T> {
@@ -115,7 +120,7 @@ async function attempt<T>(
   mode: AttemptMode,
 ): Promise<StructuredResult<T>> {
   const started = Date.now();
-  const report = async (outcome: LlmAttempt["outcome"], detail: string) => {
+  const report = async (outcome: LlmAttempt["outcome"], detail: string, via?: LlmAttempt["via"]) => {
     try {
       await options.onAttempt?.({
         provider: provider.label,
@@ -125,6 +130,7 @@ async function attempt<T>(
         outcome,
         durationMs: Date.now() - started,
         detail,
+        ...(via ? { via } : {}),
       });
     } catch {
       /* logging must never break the call */
@@ -136,8 +142,8 @@ async function attempt<T>(
       fetchImpl: options.fetchImpl,
       timeoutMs: options.timeoutMs,
     });
-    const data = readStructured(response, provider, options);
-    await report("success", "ok");
+    const { data, via } = readStructured(response, provider, options);
+    await report("success", "ok", via);
     return { data, provider: provider.label, mode };
   } catch (err) {
     await report("error", describe(err));
@@ -188,17 +194,24 @@ function buildRequest<T>(provider: LlmProvider, options: StructuredOptions<T>, m
 }
 
 /** Pull the structured answer out of a response and validate it. Never trusts raw text. */
-function readStructured<T>(response: ChatCompletionResponse, provider: LlmProvider, options: StructuredOptions<T>): T {
+function readStructured<T>(
+  response: ChatCompletionResponse,
+  provider: LlmProvider,
+  options: StructuredOptions<T>,
+): { data: T; via: "tool_call" | "content" } {
   const message = response.choices?.[0]?.message;
   const toolCall = message?.tool_calls?.find((c) => c.function?.name === options.tool.name);
   const args = toolCall?.function?.arguments;
 
   let raw: unknown;
+  let via: "tool_call" | "content";
   if (args !== undefined) {
     raw = typeof args === "string" ? parseJson(args, provider) : args;
+    via = "tool_call";
   } else if (typeof message?.content === "string" && message.content.trim() !== "") {
     // JSON retry, or a provider that ignored tool_choice and answered in text.
     raw = parseJson(message.content, provider);
+    via = "content";
   } else {
     throw new LlmProviderError(provider.label, "bad_response", "response had no tool call or content");
   }
@@ -208,7 +221,7 @@ function readStructured<T>(response: ChatCompletionResponse, provider: LlmProvid
     const where = Array.from(new Set(result.error.issues.map((i) => i.path.join(".") || "(root)"))).join(", ");
     throw new LlmValidationError(provider.label, `response failed schema validation at: ${where}`);
   }
-  return result.data;
+  return { data: result.data, via };
 }
 
 function parseJson(text: string, provider: LlmProvider): unknown {

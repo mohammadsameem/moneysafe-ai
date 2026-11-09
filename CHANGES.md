@@ -44,6 +44,12 @@ Checked against each provider's own documentation on 2026-11-08.
 - **Gemini's free daily request limit.** Google shows the limits for your project only inside AI Studio. A third-party article claims the full Flash models allow only about 20 requests per day on the free tier and the Flash-Lite models about 500; that was not confirmed from an official source. Check AI Studio, and if the number is low set `LLM_MODEL=gemini-3.5-flash-lite` (an official model id) or lower `LLM_DAILY_CAP`.
 - **No live provider call has been made.** All behaviour above is tested against a mocked `fetch`. A first real call will exercise the Gemini and Groq wire formats.
 
+### Live smoke test: `npm run llm:check`
+
+Added after the change above, because everything else is tested against a mocked `fetch`. It makes one tiny structured call per provider through the real pinned `tool_choice` path and reports, per provider: label, model id, HTTP status, whether the pinned tool call was accepted (or accepted but answered in text, or rejected so the JSON retry was needed), and PASS/FAIL. It prints no keys, base URLs, query strings or response bodies (any reason is capped at 80 characters). A provider with an empty key is skipped. This answers the two "not verified" items below once it has been run with real keys.
+
+Also fixed while adding it: the client now appends `/chat/completions` to the base URL's *path*, so a base URL with a query string (for example `?api-version=...`) keeps the query at the end.
+
 ### Files
 
 - Added: `src/lib/ai/providers.ts`, `chat-completions.ts`, `structured.ts`, `call-with-fallback.ts`, `errors.ts`, and tests in `src/lib/ai/__tests__/` (`structured`, `call-with-fallback`, `providers`, shared `fixtures`)

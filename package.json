@@ -12,6 +12,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
     "db:check": "tsx --env-file-if-exists=.env.local scripts/db-check.ts",
+    "llm:check": "tsx --env-file-if-exists=.env.local scripts/llm-check.ts",
     "db:seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
     "db:seed:verify": "tsx --env-file-if-exists=.env.local scripts/seed-verify.ts"
   },

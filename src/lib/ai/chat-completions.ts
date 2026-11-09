@@ -37,6 +37,16 @@ export interface ChatCompletionResponse {
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * `{baseUrl}/chat/completions`, appended to the URL's path so that a query string on the base
+ * URL (for example `?api-version=...`) stays at the end where it belongs.
+ */
+export function chatCompletionsUrl(baseUrl: string): string {
+  const url = new URL(baseUrl);
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/chat/completions`;
+  return url.toString();
+}
+
 export interface PostOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
@@ -48,7 +58,7 @@ export async function postChatCompletion(
   options: PostOptions = {},
 ): Promise<ChatCompletionResponse> {
   const doFetch = options.fetchImpl ?? fetch;
-  const url = `${provider.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+  const url = chatCompletionsUrl(provider.baseUrl);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
