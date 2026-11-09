@@ -5,6 +5,10 @@ import { formatDate, formatUsd, shortId, signalLabel } from "@/lib/format";
 import { createDrizzleReadRepo, toOrderDetail } from "@/lib/orders/queries";
 import { ORDER_NOTICES, isOrderNoticeKey } from "@/lib/orders/notices";
 import { getSessionId } from "@/lib/session";
+import { EvidenceVault } from "@/components/evidence/evidence-vault";
+import { isDemoModeEnabled } from "@/lib/env";
+import { getOrderEvidence } from "@/lib/orders/evidence-service";
+import { buildOrderEvidenceDeps } from "@/lib/orders/runtime";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +19,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const row = sessionId ? await createDrizzleReadRepo().findVisible(params.id, sessionId) : null;
   if (!row) notFound();
   const order = toOrderDetail(row);
+  const evidence = await getOrderEvidence(row.id, sessionId!, buildOrderEvidenceDeps());
+  const owned = !row.isSeed && row.sessionId === sessionId;
   const notice = isOrderNoticeKey(searchParams.notice) ? ORDER_NOTICES[searchParams.notice] : null;
   const scored = order.riskScore !== null;
   const active = order.signalBreakdown.filter((s) => s.active);
@@ -42,9 +48,18 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           <Fact label="Shipping" value={`${order.shippingMethod} · ${order.billingCountry} billing → ${order.shippingCountry} shipping`} />
           <Fact label="Buyer history" value={order.buyerIsFirstTime ? "First-time buyer" : "Returning buyer"} />
           <Fact label="Payment attempts" value={String(order.paymentAttemptCount)} />
-          {order.evidenceCompleteness !== null ? <Fact label="Evidence completeness" value={`${order.evidenceCompleteness}%`} /> : null}
         </dl>
       </section>
+
+      <EvidenceVault
+        orderId={order.id}
+        status={order.status}
+        owned={owned}
+        canSimulateDispute={row.isSeed || row.isDemo || isDemoModeEnabled()}
+        completeness={evidence?.completeness ?? 0}
+        breakdown={evidence?.breakdown ?? []}
+        artefacts={evidence?.artefacts ?? []}
+      />
 
       <section aria-labelledby="score" className="rounded-lg border bg-card p-4">
         <h2 id="score" className="mb-3 font-medium">Risk score</h2>

@@ -579,10 +579,18 @@
 
 ### M3-04 · Evidence Vault UI
 
-- [ ] `<EvidenceCompleteness score artefacts />`: progress ring; artefact checklist (shows split tracking sub-criteria separately); "mocked" badge on mocked events; expandable payloads
-- [ ] Evidence vault section on order detail
-- [ ] "Mark as Shipped" button + modal (tracking number + carrier)
-- [ ] "Simulate dispute" button on shipped order detail (Demo Mode only) → `POST /api/disputes/simulate`
+- [x] `<EvidenceCompleteness score artefacts />`: progress ring; artefact checklist (shows split tracking sub-criteria separately); "mocked" badge on mocked events; expandable payloads
+- [x] Evidence vault section on order detail
+- [x] "Mark as Shipped" button + modal (tracking number + carrier)
+- [x] "Simulate dispute" button on shipped order detail (Demo Mode only) → `POST /api/disputes/simulate`
+
+
+> M3-04 notes (UI only; 669 tests):
+>
+> - **Evidence Vault** on the order detail page (`src/components/evidence/`): `<EvidenceCompleteness>` (progress ring green >= 85, amber >= 60, red below, and the seven-line checklist with **\"Tracking scan events present\" and \"Scan events include Delivered\" as separate lines**, each with its points), `<ArtefactList>` (every stored artefact as an expandable `<details>` row: type, source, time, the exact stored payload; scan events listed with an orange **Mocked** badge each), **Mark as shipped** (a native `<dialog>` modal: tracking number + carrier; shows PayPal's non-blocking warning, if any, after it closes), **Log a buyer message** (shipped own orders), and **Simulate dispute** (`<SimulateDisputeButton>`, calls `POST /api/disputes/simulate` from M3-06).
+> - **Who sees what:** Mark as shipped and Log a message only on the session's own orders; a captured seed (SEED-B, SEED-F) says \"Not shipped yet. This is a shared example order, so it cannot be shipped here.\" Simulate dispute on shipped seeded or demo orders, or any shipped order in Demo Mode (REQ-DU-02 is a demo tool).
+> - **Verified live** (dev server, `DEMO_MODE=true`, signed in): a captured demo order shows the vault and Mark as shipped and no Simulate dispute; after shipping (tracking ending in X) it shows 60%, the seven criteria with points, the split tracking lines, Mocked badges, at least four expandable payloads, Simulate dispute, the message form, and no Mark as shipped; SEED-A shows 100% with the Delivered scan and Demo data; SEED-B shows the shared-example note.
+> - **Not verified:** the modal and the forms in a real browser (focus handling of `<dialog>`, keyboard use, 375 px). The ship and message APIs they call were verified in M3-03.
 
 ---
 
