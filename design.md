@@ -1,6 +1,6 @@
 # MoneySafe AI — Design
 
-> Version 1.5  
+> Version 1.6  
 > Covers: architecture, data model, PayPal service layer, agent flows, API routes, base_win_probability rubric, shared-demo DB strategy
 
 ---
@@ -15,7 +15,7 @@ Browser (Next.js App Router)
   │
   └── src/
       ├── lib/paypal/        PayPal service layer (single import boundary)
-      ├── lib/ai/            Anthropic client + tool-use schemas
+      ├── lib/ai/            Provider-agnostic LLM client (OpenAI-compatible, plain fetch) + function-calling schemas
       ├── lib/scoring/       Deterministic risk engine + recommendation engine
       ├── lib/evidence/      Evidence assembler + completeness scorer
       ├── lib/disputes/      Dispute Defender orchestrator
@@ -29,7 +29,8 @@ Browser (Next.js App Router)
 - All PayPal write calls are structurally gated: they require an `approvalRecordId` parameter, verified before any network call.
 - System computes `base_win_probability` and recommendation (EV rule); LLM explains and may override recommendation with a stated reason.
 - Dispute analysis is triggered by `POST /api/disputes/[id]/analyze`, not a GET; results cached in DB.
-- Each Anthropic call uses `tool_choice: { type: 'tool', name: '<tool_name>' }` to pin the model to a specific tool.
+- Each LLM call uses function calling through an OpenAI-compatible API, with the tool pinned by name: `tool_choice: { type: "function", function: { name } }`. If a provider rejects the pinned `tool_choice`, the call is retried once with JSON-only instructions. Every result is validated with zod.
+- The LLM is optional: with no `LLM_API_KEY` every AI feature uses its rule-based result. A second provider (`LLM_FALLBACK_*`) is tried once if the first errors or returns 429.
 - Simulation only when `DEMO_MODE=true` or `dispute.is_seed/is_demo`; live write failures retry with the same `PayPal-Request-Id`.
 - Postgres (Supabase) only; no SQLite path.
 - `computeEvidenceCompleteness` is a pure function in `src/lib/scoring/` — available in M1 so M2 analysis does not depend on M3 evidence assembly.
@@ -46,7 +47,7 @@ Browser (Next.js App Router)
 | ORM | Drizzle ORM | Postgres dialect only |
 | Database | Supabase Postgres | `?pgbouncer=true&connection_limit=1` for serverless |
 | Validation | zod 3 | All LLM tool-use output + API I/O |
-| AI | `@anthropic-ai/sdk` with tool use | Default model: `claude-sonnet-5-5` (env `ANTHROPIC_MODEL`) |
+| AI | Plain `fetch` to `{LLM_BASE_URL}/chat/completions` (OpenAI-compatible function calling) | Primary default: Gemini `gemini-3.8-flash`; optional fallback default: Groq `openai/gpt-oss-120b` (envs `LLM_*`) |
 | Charts | Recharts | |
 | Testing | Vitest | `--run` flag |
 | Deployment | Vercel + Supabase | |
@@ -426,34 +427,49 @@ Selection rule in `buildProvideEvidencePayload(dispute, draft, documents)`: `rea
 
 ```
 src/lib/ai/
-  client.ts          singleton Anthropic client
-  tools.ts           tool definitions (name, description, input_schema per tool)
-  schemas.ts         zod schemas matching tool input_schema shapes
-  prompts.ts         prompt builders (<instructions> / <data> separation)
+  providers.ts          LlmProvider config from LLM_* env (primary + optional fallback); provider labels
+  chat-completions.ts   POST {baseUrl}/chat/completions over plain fetch (timeout, no response bodies in errors)
+  structured.ts         callStructured: pinned tool call -> JSON-only retry -> zod; primary -> fallback provider
+  call-with-fallback.ts callWithFallback: not-configured / budget gate / rule-based fallback / activity logging
+  errors.ts             LlmNotConfiguredError, LlmProviderError, LlmValidationError, LlmUnavailableError
+  tools.ts              tool definitions (name, description, JSON-schema `parameters` per tool)
+  schemas.ts            zod schemas matching the tools' `parameters`
+  prompts.ts            prompt builders (<instructions> / <data> separation)
   risk-explainer.ts
   dispute-analyst.ts
   insights.ts
 ```
 
-### 5.2 Anthropic tool use pattern — per-call `tool_choice`
+### 5.2 Function calling through an OpenAI-compatible API — pinned tool, JSON fallback
 
-Each call pins the model to a specific tool using `tool_choice: { type: 'tool', name: '<tool_name>' }`:
+Any provider that speaks the OpenAI chat-completions protocol works (Gemini, Groq, OpenRouter, OpenAI, ...). There is no vendor SDK: the client is plain `fetch` calling `{LLM_BASE_URL}/chat/completions` with `Authorization: Bearer {LLM_API_KEY}`.
 
-```typescript
-const response = await anthropic.messages.create({
-  model: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5-5',
-  max_tokens: 1024,
-  tools: [riskExplanationTool],
-  tool_choice: { type: 'tool', name: 'risk_explanation' },  // pinned per call
-  messages: [{ role: 'user', content: buildPrompt(order, signals) }],
-});
+**Per provider, per call:**
 
-const toolUse = response.content.find(b => b.type === 'tool_use');
-if (!toolUse) throw new LLMError('No tool_use block in response');
-const parsed = RiskExplanationSchema.safeParse(toolUse.input);
-if (!parsed.success) throw new ZodValidationError(parsed.error);
-return parsed.data;
-```
+1. Send the prompt with the tool declared and pinned by name:
+
+   ```json
+   {
+     "model": "<LLM_MODEL>",
+     "messages": [{ "role": "user", "content": "<instructions>…</instructions><data>…</data>" }],
+     "tools": [{ "type": "function", "function": { "name": "risk_explanation", "description": "…", "parameters": { "type": "object", … } } }],
+     "tool_choice": { "type": "function", "function": { "name": "risk_explanation" } }
+   }
+   ```
+
+   The result is `choices[0].message.tool_calls[0].function.arguments` (a JSON string). If a provider ignores `tool_choice` and answers in text, the JSON in `message.content` is accepted instead.
+2. **If the provider rejects the request (HTTP 400 or 422), retry once on the same provider** with no `tools` / `tool_choice`, plus a separate static system message ("Respond with ONLY a single JSON object that matches this JSON Schema…"). JSON is parsed from `message.content`, tolerating a ```json fence.
+3. **Always validate with the zod schema.** Raw model text is never used. A response that fails validation is *not* retried on another provider; the caller uses its rule-based result (REQ-NFR-02).
+
+**Provider chain.** The primary provider (`LLM_*`) is tried first. If it errors, times out, or returns 429/5xx/401, the fallback provider (`LLM_FALLBACK_*`, if configured) is tried **once**. If both fail, the call site falls back to the rule-based result. A 429 or 5xx never triggers the JSON retry; only 400/422 does.
+
+**LLM_API_KEY is the master switch.** With it empty, no provider is configured and no network call is ever made, even if `LLM_FALLBACK_API_KEY` is set.
+
+**Logging.** Each request is one attempt. `callWithFallback` writes one `agent_activity` row per attempt, naming the provider (`gemini (primary)`, `groq (fallback)`), model, mode (`tool`/`json`) and outcome (`HTTP 429`, `ok`, `validation failed`, ...). Rows never contain API keys, prompts, or provider response bodies (providers sometimes echo parts of a key in 401 bodies).
+
+**Untrusted-input isolation is unchanged.** The prompt (with its `<instructions>` / `<data>` structure from §5.3) is sent byte-for-byte as the user message in both the tool attempt and the JSON retry. The JSON-only instruction is a separate system message and never touches the `<data>` section.
+
+**Verified provider defaults (2026-11-08, from each provider's own docs).** Gemini: base URL `https://generativelanguage.googleapis.com/v1beta/openai/`, model `gemini-3.8-flash` (free of charge on the free tier; Google's OpenAI-compat docs show `tool_choice: "auto"`, so a pinned function choice may be rejected and the JSON retry exists for that). Groq: base URL `https://api.groq.com/openai/v1`, model `openai/gpt-oss-120b` (listed with local tool use and JSON mode). Gemini's free-tier daily request limit is shown only in AI Studio; check it there and keep `LLM_DAILY_CAP` below it.
 
 ### 5.3 Untrusted input isolation (REQ-NFR-11)
 
@@ -533,7 +549,7 @@ Post-parse system clamping:
 
 Optional. During dispute analysis the LLM may call a small **allowlist of read-only** PayPal Agent Toolkit tools (e.g. fetch order, fetch transaction or shipment details) to enrich the evidence summary.
 
-- The allowlist is a hard-coded array in `src/lib/ai/agent-tools.ts`. Any tool not on it is never passed to Anthropic, so the model cannot call it. Exact toolkit tool names are confirmed against the installed `@paypal/agent-toolkit` version at implementation time; nothing that creates, captures, refunds, or submits is on the list.
+- The allowlist is a hard-coded array in `src/lib/ai/agent-tools.ts`. Any tool not on it is never sent to the LLM provider, so the model cannot call it. Exact toolkit tool names are confirmed against the installed `@paypal/agent-toolkit` version at implementation time; nothing that creates, captures, refunds, or submits is on the list.
 - No write tool is ever exposed to the LLM. Money-moving calls remain exclusively in `submitEvidence`/`acceptClaim`, gated by `approvalRecordId` (REQ-NFR-03).
 - Tool results are untrusted data: they go into the `<data>` section of any follow-up prompt, never the instructions.
 - Tool-use loop is capped (max 3 tool calls per analysis); every call is logged to `agent_activity` as `paypal_api` and counts against the LLM budget.
@@ -543,30 +559,26 @@ Optional. During dispute analysis the LLM may call a small **allowlist of read-o
 
 ```typescript
 async function callWithFallback<T>(
-  llmCall: () => Promise<T>,
-  fallback: T,
-  meta: ActivityMeta,
-): Promise<{ result: T; usedFallback: boolean }> {
-  const start = Date.now();
+  llmCall: (ctx: { onAttempt: (a: LlmAttempt) => Promise<void> }) => Promise<T>,
+  fallback: T,                       // the rule-based result
+  meta: CallMeta,                    // sessionId, toolName, PII-scrubbed inputSummary, refs
+  deps: LlmDeps,                     // { isConfigured, checkBudget, logActivity } (injected; see below)
+): Promise<{ result: T; usedFallback: boolean; reason?: FallbackReason }> {
+  if (!deps.isConfigured()) return fallbackWith('not_configured');      // no key: no budget used, no network call
 
-  // Budget gate: session limit + global daily cap. Breach = fallback, never HTTP 429.
-  const budget = await checkLlmBudget(meta.sessionId);
-  if (!budget.allowed) {
-    await logActivity({ ...meta, toolName: 'llm_budget_exceeded', inputSummary: `limit=${budget.reason}`,
-                        status: 'fallback', durationMs: Date.now() - start });
-    return { result: fallback, usedFallback: true };
-  }
+  const budget = await deps.checkBudget(meta.sessionId);                // per-session + global daily cap
+  if (!budget.allowed) return fallbackWith('budget_session' | 'budget_daily');  // never HTTP 429
 
   try {
-    const result = await llmCall();
-    await logActivity({ ...meta, status: 'success', durationMs: Date.now() - start });
+    const result = await llmCall({ onAttempt });                        // onAttempt logs one row per provider attempt
     return { result, usedFallback: false };
-  } catch (err) {
-    await logActivity({ ...meta, status: 'fallback', outputSummary: String(err), durationMs: Date.now() - start });
-    return { result: fallback, usedFallback: true };
+  } catch (err) {                                                       // providers_unavailable | validation_failed | unexpected_error
+    return fallbackWith(reasonFor(err));
   }
 }
 ```
+
+The LLM closure is `(ctx) => callStructured({ providers, tool, schema, prompt, onAttempt: ctx.onAttempt }).then(r => r.data)`. `deps` is injected so the function is testable without a database: `logActivity` is the agent-activity logger (M1-08) and `checkBudget` is `checkLlmBudget` (M1-09b). One budget unit is consumed per `callWithFallback`, not per provider attempt, so trying the fallback provider does not count twice against `LLM_DAILY_CAP`. `fallbackWith` writes a `status = 'fallback'` row (`tool_name = 'llm_budget_exceeded'` for budget breaches) and returns the rule-based value with `usedFallback = true`, which makes the UI show "AI unavailable — showing rule-based result".
 
 ---
 
@@ -961,12 +973,16 @@ Multiple judges share the same public login on the same Vercel + Supabase instan
 | `DATABASE_URL` | — | Supabase Postgres + `?pgbouncer=true&connection_limit=1` |
 | `PAYPAL_CLIENT_ID` | — | PayPal sandbox client ID |
 | `PAYPAL_CLIENT_SECRET` | — | PayPal sandbox client secret |
-| `ANTHROPIC_API_KEY` | — | Anthropic API key |
-| `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | Anthropic model name |
+| `LLM_API_KEY` | — (optional) | API key for the primary OpenAI-compatible provider. **Empty = no LLM: every AI feature uses its rule-based result** |
+| `LLM_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai/` | Primary provider base URL (calls `{LLM_BASE_URL}/chat/completions`) |
+| `LLM_MODEL` | `gemini-3.8-flash` | Primary provider model id |
+| `LLM_FALLBACK_API_KEY` | — (optional) | Key for a second provider, tried once if the first errors or returns 429. Ignored if `LLM_API_KEY` is empty |
+| `LLM_FALLBACK_BASE_URL` | `https://api.groq.com/openai/v1` | Fallback provider base URL |
+| `LLM_FALLBACK_MODEL` | `openai/gpt-oss-120b` | Fallback provider model id |
 | `DEMO_MODE` | `false` | Force demo simulation for all writes |
 | `CHARGEBACK_FEE_USD` | `20` | Fee assumption for EV rule + dashboard |
 | `CONTEST_EFFORT_USD` | `10` | Effort cost assumption for EV rule |
-| `LLM_DAILY_CAP` | `300` | Global max LLM calls per UTC day; breach → rule-based fallback |
+| `LLM_DAILY_CAP` | `200` | Global max LLM calls per UTC day; breach → rule-based fallback. Keep it under the provider's own daily limit |
 | `DEMO_PASSWORD` | — | Public demo login password |
 | `NEXTAUTH_SECRET` | — | Session signing secret |
 | `NEXTAUTH_URL` | — | Deployed app URL |
@@ -1001,19 +1017,19 @@ All `/api/*` route handlers *shall* verify a valid NextAuth session **except** `
 
 ### LLM rate limiting — fall back, never 429
 
-Two independent limits gate every LLM call, checked by `checkLlmBudget(sessionId)` in `src/lib/ai/rate-limit.ts` **before** calling Anthropic:
+Two independent limits gate every LLM call, checked by `checkLlmBudget(sessionId)` in `src/lib/ai/rate-limit.ts` **before** calling the LLM provider:
 
 | Limit | Default | Source | Storage |
 |---|---|---|---|
 | Per-session | 10 calls / rolling hour | constant | `llm_rate_limits` |
-| Global daily cap | 300 calls / UTC day | env `LLM_DAILY_CAP` | `llm_daily_usage` |
+| Global daily cap | 200 calls / UTC day (default) | env `LLM_DAILY_CAP` | `llm_daily_usage` |
 
 ```typescript
 // Returns { allowed: true } and increments both counters atomically, or { allowed: false, reason }
 async function checkLlmBudget(sessionId: string): Promise<{ allowed: boolean; reason?: 'session' | 'daily' }>
 ```
 
-**On breach (either limit), the system does NOT return HTTP 429.** The call site treats the budget check exactly like an LLM failure: it skips the Anthropic call, returns the rule-based result, sets `usedFallback = true`, and the UI shows the visible note **"AI unavailable — showing rule-based result."** The breach is logged to `agent_activity` as `status = 'fallback'`, `tool_name = 'llm_budget_exceeded'` (input_summary records which limit tripped).
+**On breach (either limit), the system does NOT return HTTP 429.** The call site treats the budget check exactly like an LLM failure: it skips the LLM call, returns the rule-based result, sets `usedFallback = true`, and the UI shows the visible note **"AI unavailable — showing rule-based result."** The breach is logged to `agent_activity` as `status = 'fallback'`, `tool_name = 'llm_budget_exceeded'` (input_summary records which limit tripped).
 
 `checkLlmBudget` is called inside `callWithFallback` so every present and future LLM call site is covered automatically. Seeded analyses never call the LLM, so judges can always walk the seeded demo regardless of budget state.
 
@@ -1021,9 +1037,9 @@ async function checkLlmBudget(sessionId: string): Promise<{ allowed: boolean; re
 
 `GET /api/demo/status` *shall* run `SELECT 1` against Postgres and return `{ demoMode: boolean, db: 'ok' }` (HTTP 200) or `{ demoMode, db: 'error' }` (HTTP 503). This makes the keep-alive cron exercise the database connection as well as the function, preventing Supabase free-tier project pause.
 
-### Anthropic spend limit
+### Free-tier limit note
 
-The README *shall* include a prominent note: **"Set a monthly spend limit in the Anthropic Console before deploying. Recommended: $10–$20 for a hackathon demo."** This is a deployment prerequisite.
+The README *shall* include a prominent note: **"This app is designed for free-tier LLM providers. Keep `LLM_DAILY_CAP` under your provider's daily request limit (check it in the provider's console, e.g. Google AI Studio for Gemini). When a provider rate-limits (HTTP 429) the app tries the optional fallback provider once, then uses its rule-based results."** If a paid key is used instead, set a spend limit in that provider's console.
 
 ---
 

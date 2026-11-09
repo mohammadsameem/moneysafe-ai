@@ -16,9 +16,9 @@
 - [x] Initialise Next.js 14 App Router project with TypeScript strict mode
 - [x] Add Tailwind CSS and shadcn/ui; configure `components.json` (Tailwind v3 setup, written by hand; see note)
 - [x] Add Drizzle ORM with Postgres dialect; configure `drizzle.config.ts` (uses `DIRECT_URL`, falls back to `DATABASE_URL`)
-- [x] Add `@anthropic-ai/sdk`, `zod`, `next-auth`, `vitest`, `recharts` dependencies (exact versions)
-- [x] Create `.env.example` with all variables from design §11 (+ `DIRECT_URL`)
-- [x] Create `src/lib/env.ts` that reads and validates all env vars with zod (lazy `getEnv()`; includes `CONTEST_EFFORT_USD`, `LLM_DAILY_CAP`)
+- [x] Add `zod`, `next-auth`, `vitest`, `recharts` dependencies (exact versions). The LLM layer is plain `fetch` against an OpenAI-compatible API, so there is no vendor SDK: `@anthropic-ai/sdk` was removed (see CHANGES.md)
+- [x] Create `.env.example` with all variables from design §11 (+ `DIRECT_URL`; the `LLM_*` provider variables replaced `ANTHROPIC_*`)
+- [x] Create `src/lib/env.ts` that reads and validates all env vars with zod (lazy `getEnv()`; includes `CONTEST_EFFORT_USD`, `LLM_DAILY_CAP` (default 200) and the optional `LLM_*` provider settings with Gemini/Groq defaults; `getLlmEnv()` reads just those)
 - [x] Add `npm run dev`, `npm run db:migrate`, `npm run db:seed`, `npm run test` scripts
 
 > Note: the current `shadcn` CLI generated a Tailwind v4 / Base UI setup that doesn't fit Next 14 + Tailwind 3, so it was rolled back and the classic shadcn config (HSL variables, `clsx` + `tailwind-merge@2`, `tailwindcss-animate`) was written by hand. Components are added later with `npx shadcn@2 add <component>`.
@@ -191,14 +191,24 @@
 
 ### M1-09 · AI client + risk explainer
 
-- [ ] `src/lib/ai/client.ts`: singleton Anthropic client; reads `ANTHROPIC_MODEL` (default `claude-sonnet-5-5`)
-- [ ] `src/lib/ai/tools.ts`: tool definitions for `risk_explanation` and `verification_draft`
+**Provider-agnostic LLM layer (done; see CHANGES.md).** OpenAI-compatible chat-completions over plain `fetch`, replacing the Anthropic SDK:
+
+- [x] `src/lib/ai/providers.ts`: provider config from `LLM_*` (primary + optional fallback), labelled by host (`gemini`, `groq`); an empty `LLM_API_KEY` yields no providers
+- [x] `src/lib/ai/chat-completions.ts`: `POST {baseUrl}/chat/completions` with Bearer auth, 30 s timeout; errors carry only a status, never a response body or key
+- [x] `src/lib/ai/structured.ts`: `callStructured` — tool pinned by name (`tool_choice: { type: "function", function: { name } }`); on HTTP 400/422 one JSON-only retry on the same provider; zod validation in every case; primary then fallback provider (once) on error/timeout/429/5xx; a zod failure is not retried elsewhere; one `onAttempt` event per request
+- [x] `src/lib/ai/call-with-fallback.ts`: `callWithFallback` — not configured / budget gate / rule-based fallback, one activity row per provider attempt; `isConfigured`, `checkBudget` and `logActivity` are injected
+- [x] `src/lib/ai/errors.ts`
+- [x] Tests with `fetch` mocked (26): success; pinned-tool rejection then JSON retry (user message with the `<data>` section byte-identical in both requests); zod failure falls back without trying the second provider; 429 then fallback provider (success, and failure to rule-based); empty key makes no network call; budget denial makes no network call; no keys or provider bodies in logs; env defaults (daily cap 200)
+
+**Remaining for M1-09:**
+
+- [ ] `src/lib/ai/tools.ts`: tool definitions for `risk_explanation` and `verification_draft` (name, description, JSON-schema `parameters` kept in step with the zod schemas)
 - [ ] `src/lib/ai/schemas.ts`: `RiskExplanationSchema`, `VerificationDraftSchema`
 - [ ] `src/lib/ai/prompts.ts`: `buildRiskPrompt(order, signals)`, `buildVerificationPrompt(order)` with `<instructions>` / `<data>` separation
 - [ ] `src/lib/ai/risk-explainer.ts`:
-  - `explainRisk(...)` — uses `tool_choice: { type: 'tool', name: 'risk_explanation' }`
-  - `draftVerification(...)` — uses `tool_choice: { type: 'tool', name: 'verification_draft' }`
-  - Both use `callWithFallback`
+  - `explainRisk(...)` — `callWithFallback((ctx) => callStructured({ providers: getConfiguredProviders(), tool: risk_explanation, schema, prompt, onAttempt: ctx.onAttempt }).then(r => r.data), ruleBasedExplanation, meta, deps)`
+  - `draftVerification(...)` — same pattern with the `verification_draft` tool and the static template as the fallback
+- [ ] Bind the real `LlmDeps`: `logActivity` from M1-08, `checkBudget` from M1-09b, `isConfigured = () => getConfiguredProviders().length > 0`
 
 ---
 
@@ -206,13 +216,13 @@
 
 - [ ] `src/lib/ai/rate-limit.ts`: `checkLlmBudget(sessionId): Promise<{ allowed: boolean; reason?: 'session' | 'daily' }>`
   - Per-session: 10 calls per rolling hour (`llm_rate_limits`; reset when `now() > window_start + 1h`)
-  - Global daily cap: `LLM_DAILY_CAP` env (default **300**) against `llm_daily_usage` for the current UTC day
+  - Global daily cap: `LLM_DAILY_CAP` env (default **200**) against `llm_daily_usage` for the current UTC day
   - Increment both counters atomically in one transaction; only increment when allowed
-- [ ] `callWithFallback` calls `checkLlmBudget` first. On breach: skip Anthropic, return the rule-based fallback with `usedFallback = true`, log `agent_activity` with `tool_name = 'llm_budget_exceeded'`, `status = 'fallback'`, and `input_summary` naming the limit. **No HTTP 429 anywhere.**
+- [ ] `callWithFallback` calls `checkLlmBudget` first (the gate itself is already implemented in `call-with-fallback.ts` against an injected `checkBudget`; this task supplies the real `checkLlmBudget` and binds it). On breach: skip the LLM call, return the rule-based fallback with `usedFallback = true`, log `agent_activity` with `tool_name = 'llm_budget_exceeded'`, `status = 'fallback'`, and `input_summary` naming the limit. **No HTTP 429 anywhere.**
 - [ ] UI shows the visible note "AI unavailable — showing rule-based result." wherever `usedFallback` is true
 - [ ] `src/middleware.ts`: require a valid NextAuth session on every `/api/*` route **except** `/api/demo/status` and `/api/auth/*`; unauthenticated API calls return 401 JSON
-- [ ] Add `LLM_DAILY_CAP` to `src/lib/env.ts` and `.env.example`
-- [ ] Unit tests (`src/lib/ai/__tests__/rate-limit.test.ts`): allowed under both limits; session breach → `{ allowed:false, reason:'session' }`; daily breach → `reason:'daily'`; counters not incremented on breach; session window resets after 1 hour; `callWithFallback` returns the fallback (no Anthropic call) on breach
+- [x] Add `LLM_DAILY_CAP` to `src/lib/env.ts` and `.env.example` (default 200; verified by `providers.test.ts`)
+- [ ] Unit tests (`src/lib/ai/__tests__/rate-limit.test.ts`): allowed under both limits; session breach → `{ allowed:false, reason:'session' }`; daily breach → `reason:'daily'`; counters not incremented on breach; session window resets after 1 hour; `callWithFallback` returns the fallback (no LLM call) on breach (this last case is already covered in `call-with-fallback.test.ts` with a fake `checkBudget`)
 
 ---
 
@@ -420,10 +430,10 @@
 Only if M3-01 to M3-06 are done and time remains. Skip without affecting the demo.
 
 - [ ] Add `@paypal/agent-toolkit` (pinned exact version); confirm its available tool names from the installed package
-- [ ] `src/lib/ai/agent-tools.ts`: hard-coded **read-only allowlist** (fetch order / transaction / shipment details only). Anything else is never passed to Anthropic. **No write tool (create, capture, refund, submit, accept) is ever exposed to the LLM.**
+- [ ] `src/lib/ai/agent-tools.ts`: hard-coded **read-only allowlist** (fetch order / transaction / shipment details only). Anything else is never sent to the LLM provider. **No write tool (create, capture, refund, submit, accept) is ever exposed to the LLM.**
 - [ ] Wire into `analyseDispute` as an optional tool-use loop: max 3 tool calls; results placed in the `<data>` section as untrusted; each call logged as `paypal_api`; budget-gated via `checkLlmBudget`
 - [ ] Skipped for seeded disputes and on any toolkit error (analysis continues with local evidence)
-- [ ] Unit test: the tool list handed to Anthropic equals the allowlist exactly; a test asserts no allowlisted name matches `create|capture|refund|submit|accept|update|delete`
+- [ ] Unit test: the tool list handed to the LLM provider equals the allowlist exactly; a test asserts no allowlisted name matches `create|capture|refund|submit|accept|update|delete`
 
 ---
 
@@ -452,7 +462,7 @@ Only if M3-01 to M3-06 are done and time remains. Skip without affecting the dem
 - [ ] `regenerateInsightsSummaryIfStale()` in `src/lib/ai/insights.ts`: compute `sha256(outcomeCount + latestOutcomeId + proposal_created_at + activeWeights)`; if it equals `insights_cache.input_fingerprint` do nothing; otherwise call `generateInsightsSummary` (via `callWithFallback`, budget-gated) and upsert `insights_cache`
 - [ ] Call `regenerateInsightsSummaryIfStale()` from the write paths only: dispute outcome insert, proposal creation, approve-weights, reject-weights, reset-demo
 - [ ] Seed `insights_cache` with a deterministic summary (`used_fallback = false`) so Insights loads populated with zero LLM calls
-- [ ] Test: two consecutive `GET /api/insights` make 0 Anthropic calls; an outcome insert followed by regenerate makes exactly 1; an unchanged fingerprint makes 0
+- [ ] Test: two consecutive `GET /api/insights` make 0 LLM calls; an outcome insert followed by regenerate makes exactly 1; an unchanged fingerprint makes 0
 - [ ] `POST /api/insights/approve-weights`: move proposed → active; clear proposed; log `merchant_action`
 - [ ] `POST /api/insights/reject-weights`: clear proposed; log `merchant_action`
 
@@ -532,7 +542,7 @@ The guard itself is built in M1-09b. This task verifies it end to end.
 - [ ] Confirm seeded disputes and the Insights page still load fully with the cap exhausted (they make no LLM calls)
 - [ ] Confirm an unauthenticated `curl` to any `/api/*` route returns 401 except `/api/demo/status`
 - [ ] Confirm the keep-alive cron hits `/api/demo/status` and the response includes `db: 'ok'`
-- [ ] Restore `LLM_DAILY_CAP=300`
+- [ ] Restore `LLM_DAILY_CAP=200`
 
 ---
 
@@ -556,7 +566,7 @@ The guard itself is built in M1-09b. This task verifies it end to end.
   14. Reset demo: SEED-C/D/E back in open inbox; H1–H5 in Resolved; proposal recreated; Dollars protected reset
 - [ ] "Demo data" badges on all seed-data components
 - [ ] Double-execution blocked: open SEED-C after approval → "Action already executed" notice; no second action execution row created
-- [ ] LLM fallback: break `ANTHROPIC_API_KEY` → fallback notes appear; system recommendation shown
+- [ ] LLM fallback: leave `LLM_API_KEY` empty, then set it to an invalid key → "AI unavailable" notes appear; system recommendation shown. With a valid primary and an invalid `LLM_FALLBACK_API_KEY` (and vice versa) the app still works
 - [ ] Live write error: with `DEMO_MODE=false` on a real (non-seed) dispute → error surfaces; retry button appears; same `PayPal-Request-Id` reused on retry
 
 ---
@@ -572,7 +582,7 @@ The guard itself is built in M1-09b. This task verifies it end to end.
   - Project name, tagline, short description (2–3 sentences)
   - Live demo URL (Vercel)
   - Public demo credentials (email + password) prominently displayed
-  - **⚠️ Deployment prerequisite: set a monthly spend limit in the Anthropic Console before deploying. Recommended: $10–$20 for a hackathon demo.**
+  - **Free-tier note: keep `LLM_DAILY_CAP` under your provider's daily request limit (check it in the provider's console, e.g. Google AI Studio for Gemini). When a provider returns 429 the app tries the optional fallback provider once, then uses its rule-based results. If a paid key is used instead, set a spend limit in that provider's console.**
   - All env vars table with types, defaults, descriptions
   - One-command local dev setup
   - Architecture overview (stack, data flow, 3–4 sentences)

@@ -16,7 +16,6 @@
     "db:seed:verify": "tsx --env-file-if-exists=.env.local scripts/seed-verify.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "1.6.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "drizzle-orm": "0.45.4",

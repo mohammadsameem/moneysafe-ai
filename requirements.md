@@ -2,7 +2,7 @@
 
 > **Tagline:** The risk desk for micro-merchants.  
 > PayPal AI Hackathon submission  
-> Version 1.7 | Single-merchant demo scope
+> Version 1.8 | Single-merchant demo scope
 
 ---
 
@@ -39,7 +39,7 @@
 - Merchant approve / edit / reject flow before any PayPal write call; approval idempotency; action executions in a separate append-only table
 - Real write failures show an error and allow retry using the existing approved record and same `PayPal-Request-Id`; simulation only when `DEMO_MODE=true` or the dispute is `is_seed`/`is_demo`
 - Learning loop: outcome recording, LLM-proposed weight changes with merchant approval and ±3 per-cycle cap
-- Agent Activity log (Anthropic tool-use for structured output)
+- Agent Activity log (LLM function calling through an OpenAI-compatible API for structured output; optional second provider; rule-based results when no LLM is configured)
 - MoneySafe AI dashboard (with simulated-outcome labelling on "Dollars protected")
 - Reset-demo, simulate-dispute, and simulate-outcome utility actions
 - Vercel + Supabase (Postgres only) deployment; public demo login credentials
@@ -61,7 +61,7 @@
 |---|---|
 | Merchant | Primary user; the only entity whose approval can trigger a money-moving or weight-change action |
 | PayPal Sandbox API | External system used to create/capture orders, fetch disputes, submit evidence, accept claims |
-| Anthropic API | LLM called via tool-use for structured output; explains recommendation and may override with a stated reason — LLM output alone can never trigger an action |
+| LLM provider (OpenAI-compatible API, e.g. Gemini or Groq free tier) | LLM called via function calling for structured output; optional (no key means rule-based results); a second provider is tried once if the first errors or returns 429; explains recommendation and may override with a stated reason — LLM output alone can never trigger an action |
 | Tracking API | Free third-party carrier tracking API (or mocked seed data labelled "mocked") |
 | System (automated) | Risk scoring engine, evidence assembler, recommendation engine, learning loop trigger |
 
@@ -105,10 +105,10 @@
 *When* the merchant opens an order detail page, *the system shall* display each active signal with its weight contribution and the overall score.
 
 **REQ-ORD-05** — AI plain-English explanation  
-*When* an order has a risk score ≥ 1, *the system shall* call the Anthropic API (via tool use) to produce a plain-English explanation (≤ 120 words) validated by zod. *If* the LLM call fails, *the system shall* show the signal list with a visible "AI explanation unavailable" note and set `used_fallback = true`.
+*When* an order has a risk score ≥ 1, *the system shall* call the LLM (function calling) to produce a plain-English explanation (≤ 120 words) validated by zod. *If* the LLM call fails, *the system shall* show the signal list with a visible "AI explanation unavailable" note and set `used_fallback = true`.
 
 **REQ-ORD-06** — Verification message draft  
-*When* the verdict is "Verify first", *the system shall* call the Anthropic API to draft a polite buyer-verification message (subject + body, ≤ 200 words). *If* the LLM call fails, *the system shall* display a static template.
+*When* the verdict is "Verify first", *the system shall* call the LLM to draft a polite buyer-verification message (subject + body, ≤ 200 words). *If* the LLM call fails, *the system shall* display a static template.
 
 **REQ-ORD-08** — Real sandbox order flow  
 *When* the merchant creates a non-seed order, *the system shall* create a PayPal sandbox order, send the buyer to the PayPal approval URL, and on return capture the order, store the capture ID, then ingest and score it. A cancelled approval *shall* mark the order cancelled. *When* a non-seed order is marked shipped, *the system shall* send the tracking number and carrier to PayPal's add-tracking endpoint for that order; a failure there *shall* warn the merchant but not block evidence assembly.
@@ -174,7 +174,7 @@ The **system** *shall* compute, before calling the LLM:
 
   where `p = base_win_probability`, `CHARGEBACK_FEE_USD` (default $20), `CONTEST_EFFORT_USD` (default $10). Otherwise recommend "refund".
 
-The **Anthropic API** *shall* then be called via tool use (with `tool_choice: { type: 'tool', name: 'dispute_analysis' }`) and *shall* return only:
+The **LLM** *shall* then be called via function calling (with `tool_choice: { type: "function", function: { name: "dispute_analysis" } }`) and *shall* return only:
 
 ```
 {
@@ -197,7 +197,7 @@ The final displayed recommendation is the LLM override if present, otherwise the
 *Stretch (non-blocking):* during analysis the LLM may call a hard-coded read-only allowlist of PayPal Agent Toolkit tools to gather extra evidence. No write-capable tool is ever exposed to the LLM, and seeded disputes never use it.
 
 **REQ-DIS-04** — Draft response  
-*When* the final recommendation is "contest", *the system shall* call the Anthropic API (tool use, `tool_choice: { type: 'tool', name: 'dispute_draft_response' }`) to draft a response (editable rich text, ≤ 400 words) citing specific evidence. The approved payload (original or edited draft) is stored in `action_executions`.
+*When* the final recommendation is "contest", *the system shall* call the LLM (function calling, `tool_choice: { type: "function", function: { name: "dispute_draft_response" } }`) to draft a response (editable rich text, ≤ 400 words) citing specific evidence. The approved payload (original or edited draft) is stored in `action_executions`.
 
 **REQ-DIS-05** — Approve / Edit / Reject flow  
 Before any PayPal write call:
@@ -245,7 +245,7 @@ Chronological timeline: dispute created → evidence assembled → AI analysis c
 *When* a dispute is resolved (won / lost / refunded — real or simulated), *the system shall* record the outcome and increment the `resolved_since_last_proposal` counter on the active `signal_weights` row.
 
 **REQ-LL-02** — LLM-proposed weight changes with merchant approval  
-*When* `resolved_since_last_proposal` reaches 5, *the system shall* check whether a proposal is already pending (`proposal_created_at IS NOT NULL`). *If* a proposal is already pending, *the system shall* continue counting but *shall not* create a new proposal until the existing one is approved or rejected. *If* no proposal is pending, *the system shall* call the Anthropic API (tool use, `tool_choice: { type: 'tool', name: 'weight_proposal' }`), apply ±3 delta cap and [5, 30] per-weight clamp, store the proposal on the active `signal_weights` row, and reset the counter to 0. Merchant must approve before weights are applied. Approval logged as `merchant_action`.
+*When* `resolved_since_last_proposal` reaches 5, *the system shall* check whether a proposal is already pending (`proposal_created_at IS NOT NULL`). *If* a proposal is already pending, *the system shall* continue counting but *shall not* create a new proposal until the existing one is approved or rejected. *If* no proposal is pending, *the system shall* call the LLM (function calling, `tool_choice: { type: "function", function: { name: "weight_proposal" } }`), apply ±3 delta cap and [5, 30] per-weight clamp, store the proposal on the active `signal_weights` row, and reset the counter to 0. Merchant must approve before weights are applied. Approval logged as `merchant_action`.
 
 **REQ-LL-03** — Insights page  
 Loading the Insights page *shall not* call the LLM. The AI summary is cached in the database and regenerated only when the resolved outcomes or the pending proposal change. Shows: current signal weights (delta vs. baseline), any pending proposal (awaiting merchant approval), dispute outcome breakdown, LLM-generated summary (≤ 150 words, zod-validated, fallback available).
@@ -371,7 +371,7 @@ Every LLM response validated by zod before use. Failures fall back to rule-based
 No PayPal write endpoint — real or simulated — *shall* be called without a stored approval record. Covered by unit test.
 
 **REQ-NFR-04** — Environment-based configuration  
-`PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (default `claude-sonnet-5-5`), `DEMO_MODE`, `DATABASE_URL`, `CHARGEBACK_FEE_USD` (default `20`), `CONTEST_EFFORT_USD` (default `10`), `DEMO_PASSWORD`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`.
+`PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_FALLBACK_API_KEY`, `LLM_FALLBACK_BASE_URL`, `LLM_FALLBACK_MODEL` (all LLM variables optional; defaults are Gemini's OpenAI-compatible endpoint with `gemini-3.8-flash`, and Groq with `openai/gpt-oss-120b` for the fallback; an empty `LLM_API_KEY` means no LLM and rule-based results everywhere), `LLM_DAILY_CAP` (default `200`), `DEMO_MODE`, `DATABASE_URL`, `CHARGEBACK_FEE_USD` (default `20`), `CONTEST_EFFORT_USD` (default `10`), `DEMO_PASSWORD`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`.
 
 **REQ-NFR-05** — Type safety  
 TypeScript strict mode throughout. All API I/O typed and validated with zod.
@@ -406,8 +406,8 @@ Buyer messages, dispute reason text, and order line item names (injected as prod
 **REQ-NFR-12** — Postgres only  
 Supabase Postgres is the only supported database. No SQLite path.
 
-**REQ-NFR-13** — Anthropic tool use with per-call `tool_choice`  
-All structured LLM output *shall* use Anthropic tool use. Each call *shall* use `tool_choice: { type: 'tool', name: '<tool_name>' }` to pin the model to the specific tool for that call (not `{ type: 'any' }`). All tool responses validated by zod post-parse.
+**REQ-NFR-13** — LLM function calling through an OpenAI-compatible API  
+All structured LLM output *shall* use function calling through an OpenAI-compatible chat-completions API (`{LLM_BASE_URL}/chat/completions`), with no vendor-specific SDK. Each call *shall* pin the tool by name with `tool_choice: { type: "function", function: { name } }`. *If* the provider rejects the pinned `tool_choice` (HTTP 400 or 422), the system *shall* retry once on that provider with JSON-only instructions and parse JSON from the message. In every case the result *shall* be validated with the zod schema; raw model text is never trusted. *If* the primary provider errors, times out or returns 429, the system *shall* try the optional fallback provider once, then use the rule-based result. A response that fails zod validation *shall* use the rule-based result without trying another provider. Each provider attempt *shall* be logged to Agent Activity with the provider name and never with an API key or provider response body.
 
 **REQ-NFR-14** — POST-triggered analysis (cached)  
 Dispute analysis *shall* be triggered by `POST /api/disputes/[id]/analyze`, not by a GET request. Results are cached in the `disputes` table. For seeded disputes, analysis is pre-computed at seed time.
@@ -416,7 +416,7 @@ Dispute analysis *shall* be triggered by `POST /api/disputes/[id]/analyze`, not 
 All PayPal write calls *shall* include a `PayPal-Request-Id` header set to `action_executions.paypal_request_id`. On retry of a failed live call, the same `paypal_request_id` *shall* be reused.
 
 **REQ-NFR-17** — LLM budget with graceful fallback  
-*Before* every LLM call, *the system shall* check a per-session limit (10 calls per rolling hour) and a global daily cap (`LLM_DAILY_CAP`, default 300 per UTC day). *If* either is exceeded, *the system shall* skip the LLM, return the rule-based result with the visible note "AI unavailable — showing rule-based result", and log the event in Agent Activity. *The system shall not* return HTTP 429 for this condition. Seeded disputes and the Insights page *shall* remain fully usable with the budget exhausted.
+*Before* every LLM call, *the system shall* check a per-session limit (10 calls per rolling hour) and a global daily cap (`LLM_DAILY_CAP`, default 200 per UTC day; keep it below the provider's own daily limit). *If* either is exceeded, *the system shall* skip the LLM, return the rule-based result with the visible note "AI unavailable — showing rule-based result", and log the event in Agent Activity. *The system shall not* return HTTP 429 for this condition. Seeded disputes and the Insights page *shall* remain fully usable with the budget exhausted.
 
 **REQ-NFR-18** — API session protection and health check  
 *The system shall* require a valid session on every `/api/*` route except `/api/demo/status`. `GET /api/demo/status` *shall* execute `SELECT 1` against the database and report database health, so the scheduled keep-alive request also keeps the database active.

@@ -10,36 +10,82 @@ const boolFromString = (defaultValue: boolean) =>
 const optionalString = z
   .string()
   .optional()
-  .transform((v) => (v && v.length > 0 ? v : undefined));
+  .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined));
 
-const envSchema = z.object({
-  // Database. Runtime uses the pooled URL; DIRECT_URL (port 5432) is only for drizzle-kit migrations.
-  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
-  DIRECT_URL: optionalString,
+/** Unset or blank -> the default; otherwise the trimmed value. */
+const stringWithDefault = (fallback: string) =>
+  z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : fallback));
 
-  // PayPal sandbox. Optional: if absent or failing, reads fall back to seeded data (REQ-DEMO-01).
-  PAYPAL_CLIENT_ID: optionalString,
-  PAYPAL_CLIENT_SECRET: optionalString,
+// ---------------------------------------------------------------------------
+// LLM provider defaults. Any OpenAI-compatible chat-completions API works; these are the
+// free-tier defaults, checked against each provider's own documentation on 2026-11-08.
+// ---------------------------------------------------------------------------
+/** Gemini's OpenAI-compatible endpoint (https://ai.google.dev/gemini-api/docs/openai). */
+export const DEFAULT_LLM_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
+/** A current Flash model that is free of charge on the Gemini API free tier. */
+export const DEFAULT_LLM_MODEL = "gemini-3.8-flash";
+/** Groq's OpenAI-compatible endpoint (https://console.groq.com/docs/openai). */
+export const DEFAULT_LLM_FALLBACK_BASE_URL = "https://api.groq.com/openai/v1";
+/** Groq lists this model with local tool use and JSON mode support. */
+export const DEFAULT_LLM_FALLBACK_MODEL = "openai/gpt-oss-120b";
+/** Global cap on LLM calls per UTC day. Keep it under the provider's own daily limit. */
+export const DEFAULT_LLM_DAILY_CAP = 200;
 
-  // Anthropic. Optional: if absent or failing, the app returns rule-based results (REQ-NFR-02).
-  ANTHROPIC_API_KEY: optionalString,
-  ANTHROPIC_MODEL: z.string().min(1).default("claude-sonnet-5-5"),
+const llmUrl = (name: string, fallback: string) =>
+  stringWithDefault(fallback).pipe(z.string().url(`${name} must be a full URL`));
 
-  // Behaviour flags and cost assumptions.
-  DEMO_MODE: boolFromString(false),
-  CHARGEBACK_FEE_USD: z.coerce.number().nonnegative().default(20),
-  CONTEST_EFFORT_USD: z.coerce.number().nonnegative().default(10),
-  LLM_DAILY_CAP: z.coerce.number().int().positive().default(300),
-
-  // Auth (single-merchant demo login).
-  DEMO_PASSWORD: z.string().min(1, "DEMO_PASSWORD is required"),
-  NEXTAUTH_SECRET: z.string().min(16, "NEXTAUTH_SECRET must be at least 16 characters"),
-  NEXTAUTH_URL: z.string().url("NEXTAUTH_URL must be a full URL"),
+/**
+ * LLM settings. Everything is optional: with no LLM_API_KEY the app never calls a model and
+ * every AI feature uses its rule-based result.
+ */
+const llmEnvSchema = z.object({
+  LLM_API_KEY: optionalString,
+  LLM_BASE_URL: llmUrl("LLM_BASE_URL", DEFAULT_LLM_BASE_URL),
+  LLM_MODEL: stringWithDefault(DEFAULT_LLM_MODEL),
+  // Optional second provider, tried once if the first errors or returns 429.
+  LLM_FALLBACK_API_KEY: optionalString,
+  LLM_FALLBACK_BASE_URL: llmUrl("LLM_FALLBACK_BASE_URL", DEFAULT_LLM_FALLBACK_BASE_URL),
+  LLM_FALLBACK_MODEL: stringWithDefault(DEFAULT_LLM_FALLBACK_MODEL),
+  LLM_DAILY_CAP: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.coerce.number().int().positive().default(DEFAULT_LLM_DAILY_CAP),
+  ),
 });
+
+export type LlmEnv = z.infer<typeof llmEnvSchema>;
+
+const envSchema = z
+  .object({
+    // Database. Runtime uses the pooled URL; DIRECT_URL (port 5432) is only for drizzle-kit migrations.
+    DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+    DIRECT_URL: optionalString,
+
+    // PayPal sandbox. Optional: if absent or failing, reads fall back to seeded data (REQ-DEMO-01).
+    PAYPAL_CLIENT_ID: optionalString,
+    PAYPAL_CLIENT_SECRET: optionalString,
+
+    // Behaviour flags and cost assumptions.
+    DEMO_MODE: boolFromString(false),
+    CHARGEBACK_FEE_USD: z.coerce.number().nonnegative().default(20),
+    CONTEST_EFFORT_USD: z.coerce.number().nonnegative().default(10),
+
+    // Auth (single-merchant demo login).
+    DEMO_PASSWORD: z.string().min(1, "DEMO_PASSWORD is required"),
+    NEXTAUTH_SECRET: z.string().min(16, "NEXTAUTH_SECRET must be at least 16 characters"),
+    NEXTAUTH_URL: z.string().url("NEXTAUTH_URL must be a full URL"),
+  })
+  .merge(llmEnvSchema);
 
 export type Env = z.infer<typeof envSchema>;
 
 let cached: Env | undefined;
+
+function describeIssues(issues: z.ZodIssue[]): string {
+  return issues.map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`).join("\n");
+}
 
 /**
  * Read and validate environment variables once.
@@ -50,13 +96,22 @@ export function getEnv(): Env {
   if (cached) return cached;
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
-    const problems = parsed.error.issues
-      .map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`)
-      .join("\n");
-    throw new Error(`Invalid environment configuration:\n${problems}\nSee .env.example.`);
+    throw new Error(`Invalid environment configuration:\n${describeIssues(parsed.error.issues)}\nSee .env.example.`);
   }
   cached = parsed.data;
   return cached;
+}
+
+/**
+ * Just the LLM settings, with defaults applied. Separate from getEnv() so the AI layer and its
+ * tests don't need database or auth variables. `source` defaults to process.env.
+ */
+export function getLlmEnv(source: Record<string, string | undefined> = process.env): LlmEnv {
+  const parsed = llmEnvSchema.safeParse(source);
+  if (!parsed.success) {
+    throw new Error(`Invalid LLM configuration:\n${describeIssues(parsed.error.issues)}\nSee .env.example.`);
+  }
+  return parsed.data;
 }
 
 /**
