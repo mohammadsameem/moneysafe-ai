@@ -525,9 +525,16 @@
 
 ### M3-01 · Tracking API integration
 
-- [ ] Research and select a free carrier tracking API (AfterShip free tier or TrackingMore)
-- [ ] `src/lib/tracking/client.ts`: `getTrackingEvents(trackingNumber, carrier)` with Demo Mode fallback (returns mocked seed events with `isMocked: true`)
-- [ ] Zod-validated `TrackingEvent` response schema
+- [x] Research and select a free carrier tracking API (AfterShip free tier or TrackingMore)
+- [x] `src/lib/tracking/client.ts`: `getTrackingEvents(trackingNumber, carrier)` with Demo Mode fallback (returns mocked seed events with `isMocked: true`)
+- [x] Zod-validated `TrackingEvent` response schema
+
+
+> M3-01 notes (9 new tests; 645 in total):
+>
+> - **No real tracking provider was added.** The free tiers I know (AfterShip, TrackingMore, 17TRACK) all need an account and an API key that you would have to create, so one cannot be wired up unattended. The provider adapter (`TrackingProvider` in `src/lib/tracking/types.ts`) is ready for one; see CHANGES.md. The first checkbox above is ticked for the selection decision, not for an integration.
+> - **`getTrackingEvents(query, deps)`** (`src/lib/tracking/client.ts`): asks the configured provider and validates the answer with the zod `TrackingEventSchema` / `TrackingResultSchema`; with no provider, in `DEMO_MODE`, on a provider error or on an answer that fails validation it returns the mocked events and says why (`fallback`). It never throws for a provider problem, so tracking can never block shipping.
+> - **Mocked provider** (`src/lib/tracking/mocked.ts`): deterministic, same journey as the seeded scans (Label Created, Picked Up +4 h, In Transit +28 h and +52 h, Out for Delivery +74 h, Delivered +78 h), only events between the ship time and now, every event `isMocked: true`. A tracking number ending in `X` stalls In Transit, which demonstrates the \"no Delivered scan\" gap.
 
 ---
 

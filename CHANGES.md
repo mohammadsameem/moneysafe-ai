@@ -6,6 +6,8 @@ Notable changes to the spec and architecture, newest first. Task-by-task progres
 ## Deviation log
 One line per deviation from the written specs, newest first.
 
+- 2026-11-09 M3-01 / REQ-EV-01: no real carrier tracking API is integrated. AfterShip, TrackingMore and 17TRACK all require an account and an API key created by the project owner, which cannot be done unattended. Tracking events always come from the deterministic mocked provider and are labelled `isMocked: true` ("mocked" badge); `TrackingProvider` is the adapter a real one would implement.
+
 - 2026-11-08 REQ-DIS-05 / M2-07: a live (not simulated) approval asks for one confirmation in the panel before it is sent; simulated approvals do not. The detail page has no route-level skeleton (it would turn a missing dispute's 404 into a 200); the analysing state is the skeleton.
 
 - 2026-11-08 REQ-DEMO / seed: 8 hand-written `agent_activity` rows are seeded (src/seed/activity.ts) so the dashboard feed and /activity are not empty on first load. agent_activity has no is_seed column, so seeded rows are identified by deterministic `seedId("activity", ...)` ids and the marker session id `seed-demo`, and every output summary starts with "Demo data:". Reset demo (M4-05) restores them by id.
