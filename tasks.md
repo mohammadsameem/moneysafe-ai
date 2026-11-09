@@ -31,13 +31,13 @@
 - [x] `llm_rate_limits`: `session_id text PK`, `call_count int NOT NULL DEFAULT 0`, `window_start text NOT NULL`
 - [x] `llm_daily_usage`: `day text PK` (`YYYY-MM-DD` UTC), `call_count int NOT NULL DEFAULT 0`
 - [x] `insights_cache`: single row — `summary`, `used_fallback`, `input_fingerprint`, `generated_at`
-- [ ] Seed row for `settings`: `merchant_avg_order_value_usd = 85` **only** (fee and effort come from env, not the table) — *done in M1-03's seed runner, not here*
+- [x] Seed row for `settings`: `merchant_avg_order_value_usd = 85` **only** (fee and effort come from env, not the table) — seeded by M1-03's runner; verified in the database (`seed-verify`: one settings row, value 85)
 - [x] Add partial unique index on `approval_records (dispute_id, action_type) WHERE decision = 'approved'`
 - [x] Generate initial migration with `drizzle-kit generate` → `src/db/migrations/0000_init.sql`
 - [x] `npm run db:migrate` script (uses `DIRECT_URL`, port 5432)
 - [x] Runtime client `src/db/client.ts`: `postgres()` with `prepare: false` on the pooled `DATABASE_URL`; lazy; `ssl: require` for non-local hosts
 - [x] `npm run db:check` (`scripts/db-check.ts`): runs `SELECT 1`, lists public tables, verifies the partial index
-- [ ] **Apply the migration to Supabase and run `npm run db:check`** — *blocked: `.env.local` does not exist yet (needs `DATABASE_URL` and `DIRECT_URL`)*
+- [x] **Apply the migration to Supabase and run `npm run db:check`** — verified: migration applied via the Session pooler (`DIRECT_URL`, port 5432; the `db.<ref>.supabase.co` direct host is IPv6-only and did not resolve from the dev machine); `db:check` shows `SELECT 1 -> 1`, the 12 tables and the partial unique index; `npm test` 7 of 7 including the live `SELECT 1`
 
 > Notes: the design's `text(2)`/`text(3)` are `varchar(2)`/`varchar(3)` (Postgres has no length on `text`). The enum-style columns (`status`, `verdict`, ...) are typed unions in TypeScript only; there are no DB CHECK constraints, matching the design.
 
@@ -45,8 +45,8 @@
 
 ### M1-03 · Seed data
 
-- [ ] **Hand-written risk text for the flagged orders (no LLM call).** For SEED-B, SEED-E-ORD and SEED-F, seed `risk_score`, `verdict`, `signal_breakdown` (all six signals with `active` and `weight`), `ai_explanation`, `used_fallback = false`, and (for SEED-B and SEED-E-ORD, which are "Verify first") `verification_draft { subject, body }`. SEED-A and SEED-D-ORD score 0 and need no explanation. This keeps the seeded demo working even when the LLM budget is exhausted.
-- [ ] Create `src/seed/data.ts` with all canonical seed records:
+- [x] **Hand-written risk text for the flagged orders (no LLM call).** For SEED-B, SEED-E-ORD and SEED-F, seed `risk_score`, `verdict`, `signal_breakdown` (all six signals with `active` and `weight`), `ai_explanation`, `used_fallback = false`, and (for SEED-B and SEED-E-ORD, which are "Verify first") `verification_draft { subject, body }`. SEED-A and SEED-D-ORD score 0 and need no explanation. This keeps the seeded demo working even when the LLM budget is exhausted.
+- [x] Create `src/seed/data.ts` with all canonical seed records (supporting files: `ids.ts` deterministic IDs, `rubric.ts` seed-time mirror of the scoring formulas, `src/lib/insights/fingerprint.ts`):
 
   **Open-inbox orders (for SEED-C, SEED-D, SEED-E disputes):**
   - **SEED-A**: Order A, $145, returning buyer, standard shipping, US→US, normal email → score **0**, Ship
@@ -80,8 +80,10 @@
   - Active row with defaults + a pending weight-change proposal (`proposed_*` fields set, `proposal_created_at` set)
   - `resolved_since_last_proposal = 0` (reset; proposal already pending so counter won't re-trigger)
 
-- [ ] Create `src/seed/runner.ts`: idempotent upsert-by-seed-ID logic
-- [ ] Implement `npm run db:seed`; verify it is re-runnable without duplicates
+- [x] Create `src/seed/runner.ts`: idempotent upsert-by-seed-ID logic (deterministic UUIDv5 primary keys + `ON CONFLICT (id) DO UPDATE`, one transaction, consistency guard before any write)
+- [x] Implement `npm run db:seed` (`scripts/seed.ts`); verified re-runnable: row counts identical after the second run. Also `npm run db:seed:verify` (`scripts/seed-verify.ts`) prints the verification tables and integrity checks
+
+> M1-03 notes: (1) Seed IDs are deterministic UUIDs because the schema has no seed-ID column. (2) H3's "buyer comms show product mismatch" is carried by the dispute's `buyer_message`, not a communications artefact: a comms artefact would lift H3's base win probability from 27% to 42%, contradicting the 0.27 above. (3) H1–H5 win probabilities are computed from their seeded evidence and stored to 4 decimal places (0.95, 0.95, 0.2667, 0.2667, 0.2667). (4) `insights_cache` has no `is_seed` column, so the Insights page (M4-03) must show the seeded summary with the Demo data badge. (5) `deadline_at` for the three open seed disputes is the placeholder `2099-01-01T00:00:00Z`; the app derives the real deadline from `deadline_offset_hours` at read time (M2-01/M2-03).
 
 ---
 

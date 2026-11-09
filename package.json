@@ -12,7 +12,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
     "db:check": "tsx --env-file-if-exists=.env.local scripts/db-check.ts",
-    "db:seed": "tsx --env-file-if-exists=.env.local src/seed/runner.ts"
+    "db:seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
+    "db:seed:verify": "tsx --env-file-if-exists=.env.local scripts/seed-verify.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.6.0",
