@@ -4,6 +4,7 @@ import { SEED_C, artefactRows } from "@/lib/evidence/__tests__/fixtures";
 import { makeOrder } from "@/lib/orders/__tests__/fakes";
 import { approveDispute } from "../approve";
 import { loadDisputeDetail } from "../detail";
+import type { OutcomeRecordedEvent } from "../types";
 import { SIMULATED_DEADLINE_HOURS, simulateDispute, simulateOutcome, simulatedDisputeId } from "../simulate";
 import { buildTimeline } from "../timeline";
 import { NOW, ORDER_ID, OTHER_SESSION, SESSION, analysed, createFakeSimulationRepo, makeRecord, type FakeSimulationRepo } from "./fakes";
@@ -12,7 +13,7 @@ const now = () => NOW;
 const shippedDemoOrder = (overrides: Parameters<typeof makeOrder>[0] = {}) =>
   makeOrder({ id: ORDER_ID, status: "shipped", isDemo: true, isSeed: false, sessionId: SESSION, amountUsd: 120, riskScore: 10, verdict: "ship", ...overrides });
 
-function deps(repo: FakeSimulationRepo, extra: { demoMode?: boolean; onOutcomeRecorded?: () => Promise<void> } = {}) {
+function deps(repo: FakeSimulationRepo, extra: { demoMode?: boolean; onOutcomeRecorded?: (event: OutcomeRecordedEvent) => Promise<void> } = {}) {
   const logs: ActivityMeta[] = [];
   return {
     logs,
@@ -68,7 +69,7 @@ describe("simulateDispute", () => {
 });
 
 describe("simulateOutcome", () => {
-  async function contested(outcomeHook?: () => Promise<void>) {
+  async function contested(outcomeHook?: (event: OutcomeRecordedEvent) => Promise<void>) {
     const record = makeRecord(analysed({ isDemo: true, isSeed: false, sessionId: SESSION }));
     const repo = createFakeSimulationRepo([record], [record.order], artefactRows(ORDER_ID, SEED_C));
     const approved = await approveDispute({ disputeId: record.dispute.id, sessionId: SESSION, merchantUserId: "m", action: "submit_evidence" }, approveDeps(repo));
@@ -78,15 +79,15 @@ describe("simulateOutcome", () => {
   }
 
   it("records Won as a simulated outcome in one step: status, outcome row, counter, hook", async () => {
-    let hookCalls = 0;
-    const { repo, id, deps: d, logs } = await contested(async () => void (hookCalls += 1));
+    const events: OutcomeRecordedEvent[] = [];
+    const { repo, id, deps: d, logs } = await contested(async (e) => void events.push(e));
     const result = await simulateOutcome({ disputeId: id, sessionId: SESSION, outcome: "won" }, d);
 
     expect(result.kind).toBe("recorded");
     expect(repo.records[0]!.dispute).toMatchObject({ status: "resolved_won", outcome: "won", outcomeIsSimulated: true });
     expect(repo.outcomes).toEqual([expect.objectContaining({ disputeId: id, outcome: "won", isSimulated: true, riskScoreSnapshot: 0, winProbabilitySnapshot: 0.95 })]);
     expect(repo.counter.value).toBe(1);
-    expect(hookCalls).toBe(1);
+    expect(events).toEqual([{ sessionId: SESSION, disputeId: id, counterAfter: 1 }]);
     expect(logs.map((l) => [l.toolName, l.status])).toEqual([["simulate_outcome", "simulated"]]);
   });
 

@@ -328,10 +328,10 @@ describe("no write tools are exposed to the model (REQ-NFR-11)", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("the tool list has exactly the five read-only tools, none named for an action", () => {
+  it("the tool list has exactly the six read-only tools, none named for an action", () => {
     const text = readFileSync(join(aiDir, "tools.ts"), "utf8");
-    const names = Array.from(text.matchAll(/name:\s*"([a-z_]+)"/g)).map((m) => m[1]);
-    expect(names.sort()).toEqual(["dispute_analysis", "dispute_draft_response", "risk_explanation", "verification_draft"]);
+    const names = Array.from(text.matchAll(/^\s{2}name:\s*"([a-z_]+)"/gm)).map((m) => m[1]);
+    expect(names.sort()).toEqual(["dispute_analysis", "dispute_draft_response", "insights_summary", "risk_explanation", "verification_draft", "weight_proposal"]);
     for (const n of names) expect(n).not.toMatch(/submit|accept|refund_now|execute|send|approve/);
   });
 });

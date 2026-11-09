@@ -7,6 +7,7 @@ import type { AnalyzeDeps } from "./analyze";
 import type { ApproveDeps } from "./approve";
 import type { DetailDeps } from "./detail";
 import type { DisputeReadDeps } from "./read";
+import { buildOutcomeHook } from "@/lib/insights/runtime";
 import { createDrizzleDisputesRepo, createDrizzleSimulationRepo } from "./repo";
 import type { SimulationDeps } from "./simulate";
 
@@ -35,7 +36,8 @@ export function buildApproveDeps(): ApproveDeps {
       paypal: getPayPalClient(),
       demoMode: isDemoModeEnabled(),
       log: logActivity,
-      // M4 binds the learning-loop check here; until then only the resolved counter moves.
+      // A refund is an outcome: count it, then check whether it is time to propose weights.
+      onOutcomeRecorded: buildOutcomeHook(),
     },
     log: logActivity,
   };
@@ -46,7 +48,8 @@ export function buildSimulationDeps(): SimulationDeps {
     repo: createDrizzleSimulationRepo(),
     demoMode: isDemoModeEnabled(),
     log: logActivity,
-    // onOutcomeRecorded: M4 binds the learning-loop check here, as for refunds.
+    // Won / Lost are outcomes too: the same learning-loop check as for refunds.
+    onOutcomeRecorded: buildOutcomeHook(),
   };
 }
 

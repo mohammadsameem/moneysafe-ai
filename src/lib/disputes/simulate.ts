@@ -13,7 +13,7 @@ import type { ActivityMeta } from "@/lib/activity/logger";
 import { uuidV5 } from "@/seed/ids";
 import { refundSnapshot } from "./executor";
 import { isResolvedStatus, toDisputeView, type DisputeView } from "./read";
-import type { DisputesRepo, RefundOutcomeInput } from "./types";
+import type { DisputesRepo, OutcomeRecordedEvent, RefundOutcomeInput } from "./types";
 
 /** Simulated disputes get a 72-hour response window (tasks M3-06). */
 export const SIMULATED_DEADLINE_HOURS = 72;
@@ -37,7 +37,11 @@ export interface SimulationRepo extends DisputesRepo {
    * `resolved_since_last_proposal` only if that row was inserted. `applied` is false when the
    * dispute was not in `action_taken` (nothing changed).
    */
-  recordSimulatedOutcome(input: { disputeId: string; outcome: SimulatedOutcome; snapshot: RefundOutcomeInput }): Promise<{ applied: boolean; outcomeRecorded: boolean }>;
+  recordSimulatedOutcome(input: {
+    disputeId: string;
+    outcome: SimulatedOutcome;
+    snapshot: RefundOutcomeInput;
+  }): Promise<{ applied: boolean; outcomeRecorded: boolean; counterAfter: number | null }>;
 }
 
 export interface SimulationDeps {
@@ -46,8 +50,8 @@ export interface SimulationDeps {
   demoMode: boolean;
   now?: () => Date;
   log?: (meta: ActivityMeta) => Promise<void>;
-  /** Called after an outcome row was inserted, for the learning loop (bound in M4). Never changes the result. */
-  onOutcomeRecorded?: () => Promise<void>;
+  /** Called after an outcome row was inserted and counted, for the learning loop. Never changes the result. */
+  onOutcomeRecorded?: (event: OutcomeRecordedEvent) => Promise<void>;
 }
 
 /** One simulated dispute per (session, order): a deterministic id makes the action idempotent and race-safe. */
@@ -173,7 +177,7 @@ export async function simulateOutcome(
   });
   if (done.outcomeRecorded) {
     try {
-      await deps.onOutcomeRecorded?.();
+      await deps.onOutcomeRecorded?.({ sessionId: req.sessionId, disputeId: dispute.id, counterAfter: done.counterAfter });
     } catch {
       /* the learning-loop check must never change the result */
     }

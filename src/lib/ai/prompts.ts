@@ -11,7 +11,8 @@
  * (free text that could carry injected instructions) is never included either; product names
  * come from line items and are escaped and capped.
  */
-import type { Verdict } from "@/lib/scoring";
+import type { InsightsSummaryInput, OutcomeForProposal } from "@/lib/insights/types";
+import { DEFAULT_SIGNAL_WEIGHTS, SIGNAL_NAMES, type SignalWeightValues, type Verdict } from "@/lib/scoring";
 
 /** The only order fields a prompt can read. The buyer's email is deliberately not among them. */
 export interface PromptOrder {
@@ -117,6 +118,85 @@ export function buildVerificationPrompt(order: PromptOrder, signals: readonly Pr
     ...(active.length > 0 ? active : ["    <signal>none</signal>"]),
     "  </reasons_to_confirm>",
     itemsBlock(lineItemNames),
+    "</data>",
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Learning-loop prompts (M4-01). Everything in <data> is built by our own code from counts, enum
+// values and signal names; no buyer text or contact detail ever reaches these prompts.
+// ---------------------------------------------------------------------------
+const weightsBlock = (current: SignalWeightValues, baseline?: SignalWeightValues): string =>
+  [
+    "  <current_weights>",
+    ...SIGNAL_NAMES.map((s) => `    <weight signal="${s}" current="${Math.trunc(current[s])}"${baseline ? ` baseline="${Math.trunc(baseline[s])}"` : ""} />`),
+    "  </current_weights>",
+  ].join("\n");
+
+const outcomeLine = (o: OutcomeForProposal): string =>
+  `    <outcome result="${escapeData(o.outcome, 10)}" dispute_reason="${escapeData(o.reason, 20)}" amount_usd="${o.amountUsd.toFixed(2)}" ` +
+  `risk_score="${Math.trunc(o.riskScore)}" verdict="${escapeData(o.verdict, 10)}" win_probability="${o.winProbability.toFixed(2)}" ` +
+  `simulated="${o.isSimulated ? "true" : "false"}" active_signals="${o.activeSignals.map((s) => escapeData(s, 30)).join(",") || "none"}" />`;
+
+export interface WeightProposalPromptInput {
+  current: SignalWeightValues;
+  /** Newest first. */
+  outcomes: readonly OutcomeForProposal[];
+}
+
+/** Prompt for the `weight_proposal` tool. */
+export function buildWeightProposalPrompt(input: WeightProposalPromptInput): string {
+  return [
+    "<instructions>",
+    "You are a risk assistant for a small online merchant. Use the weight_proposal tool to propose new weights for six",
+    "explainable risk signals, based on how the most recent resolved disputes ended. The current weights and the outcomes",
+    "are in the data.",
+    "Rules: return a whole-number weight for every signal. Change a weight by at most 3 points from its current value, and",
+    "keep every weight between 5 and 30. Leave a weight unchanged unless the outcomes support changing it: raise it when",
+    "orders with that signal active tend to end badly (lost or refunded), lower it when they tend to end well (won).",
+    "A handful of outcomes is a very small sample, so prefer small changes, or none, and say so.",
+    "Write the reasoning for a shop owner with no technical background, at most 120 words. Name each signal you changed",
+    "and why. Do not invent facts that are not in the data.",
+    UNTRUSTED_NOTICE,
+    "</instructions>",
+    "",
+    "<data>",
+    weightsBlock(input.current),
+    `  <recent_outcomes count="${input.outcomes.length}">`,
+    ...input.outcomes.map(outcomeLine),
+    "  </recent_outcomes>",
+    "</data>",
+  ].join("\n");
+}
+
+/** Prompt for the `insights_summary` tool. */
+export function buildInsightsSummaryPrompt(input: InsightsSummaryInput): string {
+  const { stats } = input;
+  const pending = input.proposed ? SIGNAL_NAMES.filter((s) => input.proposed![s] !== input.current[s]) : [];
+  return [
+    "<instructions>",
+    "You are a risk assistant for a small online merchant. Use the insights_summary tool to return a short, plain-English",
+    "summary of how resolved disputes are going and what the pending weight change (if there is one) means.",
+    "Write at most 110 words for a shop owner with no technical background. State how many disputes were won, lost and",
+    "refunded, mention simulated outcomes if there are any, and say plainly that a pending change does nothing until the",
+    "merchant approves it. A handful of outcomes is a very small sample; say so if it is. Do not invent facts that are not",
+    "in the data.",
+    UNTRUSTED_NOTICE,
+    "</instructions>",
+    "",
+    "<data>",
+    `  <outcome_counts total="${stats.total}" won="${stats.won}" lost="${stats.lost}" refunded="${stats.refunded}" simulated="${stats.simulated}" />`,
+    weightsBlock(input.current, DEFAULT_SIGNAL_WEIGHTS),
+    input.proposed
+      ? [
+          `  <pending_proposal changes="${pending.length}">`,
+          ...pending.map((s) => `    <change signal="${s}" from="${Math.trunc(input.current[s])}" to="${Math.trunc(input.proposed![s])}" />`),
+          "  </pending_proposal>",
+        ].join("\n")
+      : "  <pending_proposal changes=\"0\" />",
+    `  <recent_outcomes count="${Math.min(input.recent.length, 10)}">`,
+    ...input.recent.slice(0, 10).map(outcomeLine),
+    "  </recent_outcomes>",
     "</data>",
   ].join("\n");
 }

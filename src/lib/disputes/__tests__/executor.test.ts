@@ -96,6 +96,32 @@ describe("executeApproved: live", () => {
     expect(repo.outcomes).toHaveLength(1);
     expect(repo.counter.value).toBe(1);
     expect(onOutcomeRecorded).toHaveBeenCalledTimes(1);
+    // The hook gets the counter value THIS outcome's bump produced (the learning loop keys on it).
+    expect(onOutcomeRecorded).toHaveBeenCalledWith({ sessionId: SESSION, disputeId: DISPUTE_ID, counterAfter: 1 });
+  });
+
+  it("the hook is told the counter after each outcome: 1, 2, 3 ... (never the same value twice)", async () => {
+    const seen: (number | null)[] = [];
+    for (let i = 0; i < 3; i++) {
+      const record = makeRecord(analysed({ isSeed: false, isDemo: true, id: `dddddddd-dddd-4ddd-8ddd-00000000000${i}`, finalRecommendation: "refund" }));
+      const repo = createFakeDisputesRepo([record]);
+      repo.counter.value = i; // the shared counter already holds the previous outcomes
+      const { approval, execution } = await repo.insertApprovalWithExecution({
+        disputeId: record.dispute.id,
+        actionType: "accept_claim",
+        merchantUserId: "m",
+        payloadHash: "h",
+        approvedPayload: ACCEPT_BODY,
+        originalDraft: null,
+        editedDraft: null,
+        paypalRequestId: "r",
+      });
+      await executeApproved(
+        { dispute: record.dispute, order: record.order, approval, execution, sessionId: SESSION },
+        deps(repo, { onOutcomeRecorded: async (e) => void seen.push(e.counterAfter) }),
+      );
+    }
+    expect(seen).toEqual([1, 2, 3]);
   });
 
   it("a PayPal failure marks nothing done and returns a retryable error with PayPal's safe message", async () => {

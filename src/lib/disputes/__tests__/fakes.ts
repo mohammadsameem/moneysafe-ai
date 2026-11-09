@@ -306,14 +306,14 @@ export function createFakeDisputesRepo(records: DisputeRecord[], artefacts: Evid
     async completeExecution(input) {
       const i = executions.findIndex((e) => e.id === input.executionId);
       const current = executions[i];
-      if (!current || current.executedAt !== null) return { applied: false, execution: null, outcomeRecorded: false }; // WHERE executed_at IS NULL
+      if (!current || current.executedAt !== null) return { applied: false, execution: null, outcomeRecorded: false, counterAfter: null }; // WHERE executed_at IS NULL
       const execution: ActionExecution = { ...current, executedAt: input.executedAt, isSimulated: input.isSimulated, paypalResponse: input.paypalResponse };
       executions[i] = execution;
 
       const record = base.records.find((r) => r.dispute.id === input.disputeId);
       if (input.actionType === "submit_evidence") {
         if (record?.dispute.status === "open") setDispute(input.disputeId, { status: "action_taken" });
-        return { applied: true, execution, outcomeRecorded: false };
+        return { applied: true, execution, outcomeRecorded: false, counterAfter: null };
       }
 
       if (record && (record.dispute.status === "open" || record.dispute.status === "action_taken")) {
@@ -326,7 +326,7 @@ export function createFakeDisputesRepo(records: DisputeRecord[], artefacts: Evid
         outcomes.push({ disputeId: input.disputeId, outcome: "refunded", ...snapshot, isSimulated: input.isSimulated });
         counter.value += 1;
       }
-      return { applied: true, execution, outcomeRecorded: !already };
+      return { applied: true, execution, outcomeRecorded: !already, counterAfter: already ? null : counter.value };
     },
   };
 }
@@ -369,14 +369,14 @@ export function createFakeSimulationRepo(records: DisputeRecord[], orders: Order
     },
     async recordSimulatedOutcome({ disputeId, outcome, snapshot }) {
       const d = base.records.find((r) => r.dispute.id === disputeId)?.dispute;
-      if (!d || d.status !== "action_taken" || !d.isDemo || d.isSeed) return { applied: false, outcomeRecorded: false };
+      if (!d || d.status !== "action_taken" || !d.isDemo || d.isSeed) return { applied: false, outcomeRecorded: false, counterAfter: null };
       setDispute(disputeId, { status: outcome === "won" ? "resolved_won" : "resolved_lost", outcome, outcomeIsSimulated: true });
       const already = base.outcomes.some((o) => o.disputeId === disputeId);
       if (!already) {
         base.outcomes.push({ disputeId, outcome, ...snapshot, isSimulated: true });
         base.counter.value += 1;
       }
-      return { applied: true, outcomeRecorded: !already };
+      return { applied: true, outcomeRecorded: !already, counterAfter: already ? null : base.counter.value };
     },
   };
 }

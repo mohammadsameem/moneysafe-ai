@@ -5,6 +5,8 @@ import { simulateOutcome } from "@/lib/disputes/simulate";
 import { getSessionId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
+/** The outcome is recorded, then the learning loop may ask a model (a proposal, a refreshed summary). */
+export const maxDuration = 60;
 
 const BodySchema = z.object({ outcome: z.enum(["won", "lost"]) }).strict();
 

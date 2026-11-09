@@ -116,6 +116,18 @@ export interface CompleteExecutionResult {
   execution: ActionExecution | null;
   /** True only when THIS call inserted the dispute_outcomes row and bumped the counter. */
   outcomeRecorded: boolean;
+  /**
+   * `resolved_since_last_proposal` right after THIS call's bump (UPDATE ... RETURNING), or null
+   * when this call did not count an outcome. The learning loop keys its "every 5th" check on it.
+   */
+  counterAfter: number | null;
+}
+
+/** Passed to the learning-loop hook after an outcome row was inserted and counted. */
+export interface OutcomeRecordedEvent {
+  sessionId: string;
+  disputeId: string;
+  counterAfter: number | null;
 }
 
 export interface ExecutionRepo {

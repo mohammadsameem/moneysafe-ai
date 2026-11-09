@@ -21,7 +21,7 @@ import {
   type PayPalDisputeWrite,
 } from "@/lib/paypal";
 import { performLiveDisputeWrite } from "@/lib/paypal/dispute-writes";
-import type { DisputeActionType, ExecutionRepo, RefundOutcomeInput } from "./types";
+import type { DisputeActionType, ExecutionRepo, OutcomeRecordedEvent, RefundOutcomeInput } from "./types";
 
 const ProvideEvidenceSchema = z.object({
   evidences: z
@@ -46,10 +46,10 @@ export interface ExecutorDeps {
   now?: () => Date;
   log?: (meta: ActivityMeta) => Promise<void>;
   /**
-   * Called after a refund outcome was recorded, so the learning loop (M4) can check whether it is
-   * time to propose weight changes. A failure here never changes the result.
+   * Called after a refund outcome was recorded and counted, so the learning loop (M4) can check
+   * whether it is time to propose weight changes. A failure here never changes the result.
    */
-  onOutcomeRecorded?: () => Promise<void>;
+  onOutcomeRecorded?: (event: OutcomeRecordedEvent) => Promise<void>;
 }
 
 export interface ExecuteContext {
@@ -154,7 +154,7 @@ export async function executeApproved(ctx: ExecuteContext, deps: ExecutorDeps): 
   await log(simulate ? "simulated" : "success", simulate ? `simulated ${action}; nothing was sent to PayPal` : `${action} accepted by PayPal`);
   if (done.outcomeRecorded) {
     try {
-      await deps.onOutcomeRecorded?.();
+      await deps.onOutcomeRecorded?.({ sessionId: ctx.sessionId, disputeId: dispute.id, counterAfter: done.counterAfter });
     } catch {
       /* the learning-loop check must never change the result */
     }

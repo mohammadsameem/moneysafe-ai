@@ -17,11 +17,15 @@ import {
   DRAFT_RESPONSE_MAX_WORDS,
   EVIDENCE_ITEM_MAX_CHARS,
   EVIDENCE_LIST_MAX_ITEMS,
+  INSIGHTS_SUMMARY_MAX_CHARS,
+  INSIGHTS_SUMMARY_MAX_WORDS,
   RISK_EXPLANATION_MAX_CHARS,
   RISK_EXPLANATION_MAX_WORDS,
   VERIFICATION_BODY_MAX_CHARS,
   VERIFICATION_BODY_MAX_WORDS,
   VERIFICATION_SUBJECT_MAX_CHARS,
+  WEIGHT_PROPOSAL_REASONING_MAX_CHARS,
+  WEIGHT_PROPOSAL_REASONING_MAX_WORDS,
 } from "./schemas";
 import type { StructuredTool } from "./structured";
 
@@ -119,5 +123,61 @@ export const DISPUTE_DRAFT_RESPONSE_TOOL: StructuredTool = {
       },
     },
     required: ["response_text"],
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Learning-loop tools (M4-01). Also read-only: they return numbers and text. A proposal is only
+// STORED as pending; nothing changes until the merchant approves it on the Insights page.
+// ---------------------------------------------------------------------------
+const weightProperty = (signal: string) => ({
+  type: "integer",
+  description: `New whole-number weight for ${signal}. Change it by at most 3 points from the current value, or leave it unchanged.`,
+  minimum: 1,
+  maximum: 40,
+});
+
+export const WEIGHT_PROPOSAL_TOOL: StructuredTool = {
+  name: "weight_proposal",
+  description: "Return proposed new weights for the six explainable risk signals, with the reasoning, based on recently resolved disputes.",
+  parameters: {
+    type: "object",
+    properties: {
+      proposed_weights: {
+        type: "object",
+        description: "One whole-number weight for each of the six signals. Repeat the current value for any signal you do not want to change.",
+        properties: {
+          country_mismatch: weightProperty("country_mismatch"),
+          first_time_high_value: weightProperty("first_time_high_value"),
+          rush_shipping: weightProperty("rush_shipping"),
+          high_relative_value: weightProperty("high_relative_value"),
+          disposable_email: weightProperty("disposable_email"),
+          repeated_attempts: weightProperty("repeated_attempts"),
+        },
+        required: ["country_mismatch", "first_time_high_value", "rush_shipping", "high_relative_value", "disposable_email", "repeated_attempts"],
+      },
+      reasoning: {
+        type: "string",
+        description: `Plain-English reasoning for a shop owner, at most ${WEIGHT_PROPOSAL_REASONING_MAX_WORDS} words. Name each signal you changed and why, and say how small the sample is.`,
+        maxLength: WEIGHT_PROPOSAL_REASONING_MAX_CHARS,
+      },
+    },
+    required: ["proposed_weights", "reasoning"],
+  },
+};
+
+export const INSIGHTS_SUMMARY_TOOL: StructuredTool = {
+  name: "insights_summary",
+  description: "Return a short plain-English summary of how resolved disputes are going and what the pending weight change (if any) means.",
+  parameters: {
+    type: "object",
+    properties: {
+      summary: {
+        type: "string",
+        description: `Plain-English summary for a shop owner, at most ${INSIGHTS_SUMMARY_MAX_WORDS} words.`,
+        maxLength: INSIGHTS_SUMMARY_MAX_CHARS,
+      },
+    },
+    required: ["summary"],
   },
 };

@@ -28,6 +28,18 @@ import {
 /** Postgres error code for a unique-constraint violation. */
 const UNIQUE_VIOLATION = "23505";
 
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+/** Count one resolved dispute on the active weights row; returns the counter right after (RETURNING). */
+async function bumpResolvedCounter(tx: Tx): Promise<number | null> {
+  const rows = await tx
+    .update(signalWeights)
+    .set({ resolvedSinceLastProposal: sql`${signalWeights.resolvedSinceLastProposal} + 1` })
+    .where(eq(signalWeights.isActive, true))
+    .returning({ counter: signalWeights.resolvedSinceLastProposal });
+  return rows[0]?.counter ?? null;
+}
+
 export function createDrizzleDisputesRepo(db: Db = getDb()): DisputesRepo {
   const joined = () => db.select({ dispute: disputes, order: orders }).from(disputes).innerJoin(orders, eq(disputes.orderId, orders.id));
   const visible = (sessionId: string) => or(eq(disputes.isSeed, true), eq(disputes.sessionId, sessionId));
@@ -171,11 +183,11 @@ export function createDrizzleDisputesRepo(db: Db = getDb()): DisputesRepo {
           .where(and(eq(actionExecutions.id, input.executionId), isNull(actionExecutions.executedAt)))
           .returning();
         const execution = updated[0];
-        if (!execution) return { applied: false, execution: null, outcomeRecorded: false }; // already completed
+        if (!execution) return { applied: false, execution: null, outcomeRecorded: false, counterAfter: null }; // already completed
 
         if (input.actionType === "submit_evidence") {
           await tx.update(disputes).set({ status: "action_taken" }).where(and(eq(disputes.id, input.disputeId), eq(disputes.status, "open")));
-          return { applied: true, execution, outcomeRecorded: false };
+          return { applied: true, execution, outcomeRecorded: false, counterAfter: null };
         }
 
         // accept_claim: the refund outcome is recorded automatically (REQ-DIS-09).
@@ -200,13 +212,9 @@ export function createDrizzleDisputesRepo(db: Db = getDb()): DisputesRepo {
           .returning({ id: disputeOutcomes.id });
         const recorded = inserted.length > 0;
         // Count it only if this call created the outcome row, so a retry can never count it twice.
-        if (recorded) {
-          await tx
-            .update(signalWeights)
-            .set({ resolvedSinceLastProposal: sql`${signalWeights.resolvedSinceLastProposal} + 1` })
-            .where(eq(signalWeights.isActive, true));
-        }
-        return { applied: true, execution, outcomeRecorded: recorded };
+        let counterAfter: number | null = null;
+        if (recorded) counterAfter = await bumpResolvedCounter(tx);
+        return { applied: true, execution, outcomeRecorded: recorded, counterAfter };
       });
     },
   };
@@ -248,7 +256,7 @@ export function createDrizzleSimulationRepo(db: Db = getDb()): SimulationRepo {
           .set({ status: outcome === "won" ? "resolved_won" : "resolved_lost", outcome, outcomeIsSimulated: true })
           .where(and(eq(disputes.id, disputeId), eq(disputes.status, "action_taken"), eq(disputes.isDemo, true), eq(disputes.isSeed, false)))
           .returning({ id: disputes.id });
-        if (updated.length === 0) return { applied: false, outcomeRecorded: false };
+        if (updated.length === 0) return { applied: false, outcomeRecorded: false, counterAfter: null };
 
         const inserted = await tx
           .insert(disputeOutcomes)
@@ -264,13 +272,9 @@ export function createDrizzleSimulationRepo(db: Db = getDb()): SimulationRepo {
           .onConflictDoNothing({ target: disputeOutcomes.disputeId })
           .returning({ id: disputeOutcomes.id });
         const recorded = inserted.length > 0;
-        if (recorded) {
-          await tx
-            .update(signalWeights)
-            .set({ resolvedSinceLastProposal: sql`${signalWeights.resolvedSinceLastProposal} + 1` })
-            .where(eq(signalWeights.isActive, true));
-        }
-        return { applied: true, outcomeRecorded: recorded };
+        let counterAfter: number | null = null;
+        if (recorded) counterAfter = await bumpResolvedCounter(tx);
+        return { applied: true, outcomeRecorded: recorded, counterAfter };
       });
     },
   };

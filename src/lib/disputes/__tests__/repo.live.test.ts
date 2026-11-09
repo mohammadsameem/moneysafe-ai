@@ -114,7 +114,7 @@ describe.skipIf(!process.env.DATABASE_URL)("disputes repo against the live datab
 
     expect(first).toMatchObject({ applied: true, outcomeRecorded: false });
     expect(first.execution).toMatchObject({ isSimulated: true, paypalResponse: { simulated: true } });
-    expect(second).toEqual({ applied: false, execution: null, outcomeRecorded: false });
+    expect(second).toEqual({ applied: false, execution: null, outcomeRecorded: false, counterAfter: null });
     const { getSql } = await import("@/db/client");
     expect((await getSql()`SELECT status FROM disputes WHERE id = ${disputeId}`)[0]?.status).toBe("action_taken");
     expect((await getSql()`SELECT executed_at FROM action_executions WHERE id = ${execution.id}`)[0]?.executed_at).toBe(done.executedAt); // the second call changed nothing
@@ -139,7 +139,7 @@ describe.skipIf(!process.env.DATABASE_URL)("disputes repo against the live datab
     const first = await repo.completeExecution(done);
     const retry = await repo.completeExecution(done); // a retry after success must not count again
 
-    expect(first).toMatchObject({ applied: true, outcomeRecorded: true });
+    expect(first).toMatchObject({ applied: true, outcomeRecorded: true, counterAfter: before + 1 }); // RETURNING gives this call's own value
     expect(retry).toMatchObject({ applied: false, outcomeRecorded: false });
     expect(await counter()).toBe(before + 1);
     const { getSql } = await import("@/db/client");

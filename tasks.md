@@ -673,15 +673,25 @@ Added at checkpoint E. Built right after M3-06.
 
 ### M4-01 · Learning loop
 
-- [ ] `src/lib/ai/insights.ts`:
+- [x] `src/lib/ai/insights.ts`:
   - `proposeWeightChanges(outcomes, currentWeights)` — `tool_choice: { type: 'tool', name: 'weight_proposal' }`; ±3 cap; [5,30] clamp; fallback = unchanged weights with note
   - `generateInsightsSummary(outcomes, weights, proposed)` — `tool_choice: { type: 'tool', name: 'insights_summary' }`
-- [ ] Add `weight_proposal`, `insights_summary` tool definitions to `src/lib/ai/tools.ts`
-- [ ] Trigger on `dispute_outcomes` insert:
+- [x] Add `weight_proposal`, `insights_summary` tool definitions to `src/lib/ai/tools.ts`
+- [x] Trigger on `dispute_outcomes` insert:
   - Increment `resolved_since_last_proposal`
   - If `resolved_since_last_proposal % 5 = 0`:
     - **If** `proposal_created_at IS NOT NULL` (proposal already pending): log `rule_engine` step `"proposal_skipped_pending"`; do **not** call LLM; do **not** reset counter
     - **Else**: call `proposeWeightChanges`; store proposal; reset `resolved_since_last_proposal = 0`
+
+
+> M4-01 notes (53 new tests; 754 in total):
+>
+> - **Trigger** (`src/lib/insights/loop.ts`, `runLearningLoop`): called by the existing `onOutcomeRecorded` hooks, which are now bound (`buildOutcomeHook`) for refunds (executor) and for Won / Lost (Simulate outcome). The outcome insert and the counter bump were already one transaction; they now also return the counter value that bump produced (`UPDATE ... RETURNING`), and the hook receives it as `counterAfter`. The loop keys on that number, not on a re-read of the row, so two outcomes recorded together cannot both skip or both trigger a multiple of 5.
+> - **Rules (REQ-LL-02):** counter not a multiple of 5 -> nothing. Multiple of 5 with a proposal pending (`proposal_created_at` set) -> `rule_engine` row `proposal_skipped_pending`, no model call, counter not reset (keeps counting; 6..9 do nothing, 10 skips again). Multiple of 5, none pending -> `proposeWeightChanges` over the 20 most recent outcomes, the system caps it, `storeProposal` writes it as pending only if none is pending (one conditional UPDATE that also resets the counter), `weight_proposal_created` row. A rejected proposal leaves the counter where it was.
+> - **`src/lib/ai/insights.ts`:** `proposeWeightChanges` (tool `weight_proposal` pinned by `tool_choice`) and `generateInsightsSummary` (`insights_summary`), both through `callWithFallback`, so budget, missing key, outage and an invalid answer all give the fallback. Caps in `src/lib/insights/weights.ts` (`capProposal`): `delta = clamp(proposed - current, -3, +3)`, then `clamp(current + delta, 5, 30)`; if the system limited anything, the stored reasoning ends with a note saying so. The zod schema accepts whole numbers 1-40, as in the design. The prompt carries the current weights and, per outcome, the result, reason, amount, risk score, verdict and the signals that fired; no buyer text or contact detail.
+> - **Learning-loop calls get 5 s per provider** (`INSIGHTS_LLM_TIMEOUT_MS`) instead of 8 s, because they run inside the Approve / Simulate outcome request. `max-duration.test.ts` now lists those two routes with their worst case (2 providers x 5 s x 2 calls, plus one 20 s PayPal request on Approve = 40 s, +15 s margin, within 60).
+> - **Verified live** (dev server, real Supabase, real Groq, a session of its own, shared state re-seeded afterwards, 13/13): with the seeded proposal pending, a 5th outcome (refund on my SEED-D copy) left the counter at 5, left the proposal alone, logged `proposal_skipped_pending` and made no model call; a 6th (Simulate outcome Won) counted to 6. With no proposal pending, the 5th outcome made one `weight_proposal` call, stored a proposal (`20,22,15,20,15,10`: within +/-3 and 5-30), reset the counter to 0, left every live weight unchanged, and logged `weight_proposal_created`.
+> - **Not verified:** the model-unavailable path against the live database (unit-tested with a missing key, a spent budget and five invalid answers); the cap against a real model answer that overshoots (unit-tested).
 
 ---
 

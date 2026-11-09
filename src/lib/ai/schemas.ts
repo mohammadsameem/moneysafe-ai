@@ -96,3 +96,46 @@ export const DraftResponseSchema = z.object({
     .refine((text) => countWords(text) <= DRAFT_RESPONSE_MAX_WORDS, `must be at most ${DRAFT_RESPONSE_MAX_WORDS} words`),
 });
 export type DraftResponse = z.infer<typeof DraftResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// weight_proposal (design 5.4, REQ-LL-02). The model proposes six whole-number weights and says
+// why; the SYSTEM then caps each change to +/-3 and keeps every weight in [5, 30]. The schema
+// accepts a wider range (1-40) than the final result, exactly as the design specifies.
+// ---------------------------------------------------------------------------
+export const WEIGHT_PROPOSAL_REASONING_MAX_CHARS = 900;
+export const WEIGHT_PROPOSAL_REASONING_MAX_WORDS = 150;
+const proposedWeight = z.number().int().min(1).max(40);
+
+export const WeightProposalSchema = z.object({
+  proposed_weights: z.object({
+    country_mismatch: proposedWeight,
+    first_time_high_value: proposedWeight,
+    rush_shipping: proposedWeight,
+    high_relative_value: proposedWeight,
+    disposable_email: proposedWeight,
+    repeated_attempts: proposedWeight,
+  }),
+  reasoning: z
+    .string()
+    .trim()
+    .min(1, "must not be empty")
+    .max(WEIGHT_PROPOSAL_REASONING_MAX_CHARS)
+    .refine((text) => countWords(text) <= WEIGHT_PROPOSAL_REASONING_MAX_WORDS, `must be at most ${WEIGHT_PROPOSAL_REASONING_MAX_WORDS} words`),
+});
+export type WeightProposal = z.infer<typeof WeightProposalSchema>;
+
+// ---------------------------------------------------------------------------
+// insights_summary (REQ-LL-03): at most 150 words.
+// ---------------------------------------------------------------------------
+export const INSIGHTS_SUMMARY_MAX_CHARS = 900;
+export const INSIGHTS_SUMMARY_MAX_WORDS = 150;
+
+export const InsightsSummarySchema = z.object({
+  summary: z
+    .string()
+    .trim()
+    .min(1, "must not be empty")
+    .max(INSIGHTS_SUMMARY_MAX_CHARS)
+    .refine((text) => countWords(text) <= INSIGHTS_SUMMARY_MAX_WORDS, `must be at most ${INSIGHTS_SUMMARY_MAX_WORDS} words`),
+});
+export type InsightsSummary = z.infer<typeof InsightsSummarySchema>;
