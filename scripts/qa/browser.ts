@@ -4,7 +4,7 @@
  *
  *   npm run qa:browser            (the dev server must be running, DEMO_MODE=true)
  *   QA_SECTIONS=pages,feed npm run qa:browser   (only some sections; ids: start, pages, hero, tabs, reset, missing, feed,
- *                                                feedvisible, feedfaults). Each section has a hard limit (QA_SECTION_MS, default
+ *                                                feedvisible, feedfaults, feedoutage). Each section has a hard limit (QA_SECTION_MS, default
  *                                                90 s); a section that hangs prints its last step, the requests still open and the
  *                                                last 20 page events, fails, and the run continues on a fresh tab.
  *   QA_TIMING=1                   prints how long every page load and settle took.
@@ -991,6 +991,7 @@ async function main(): Promise<void> {
     check("  ...and the status line is back to normal", filterLine.state === "ok", `${filterLine.state}`);
 
     // The session ends (401): say so once and stop polling, instead of retrying for ever.
+    await page.stopIntercepting();
     await page.goto("/");
     page.clearNet();
     await page.intercept("*/api/activity*", () => ({ status: 401, body: '{"error":"unauthorized"}' }));
@@ -999,6 +1000,31 @@ async function main(): Promise<void> {
     const afterEnd = page.activityPolls().length;
     await sleep(11_000);
     check("  ...and stops polling (no more requests in 11 s)", page.activityPolls().length === afterEnd, `${page.activityPolls().length - afterEnd} more`);
+    await page.stopIntercepting();
+      } },
+
+      { id: "feedoutage", title: "Activity feed: a short server outage (3 failed polls), then recovery without a reload", run: async (page) => {
+    await page.setViewport(DESKTOP);
+    await page.goto("/");
+    page.clearNet();
+    // The first three polls cannot reach the server (as when it is restarting); from the fourth on it is back.
+    await page.intercept("*/api/activity*", (_url, n) => (n <= 3 ? { fail: "ConnectionRefused" } : "continue"));
+    const t0 = Date.now();
+    const seen: Array<[string, number]> = [];
+    let last = "";
+    while (Date.now() - t0 < 60_000) {
+      const l = await page.feedLine();
+      if (l.state !== last) {
+        seen.push([String(l.state), Math.round((Date.now() - t0) / 1000)]);
+        last = String(l.state);
+      }
+      if (seen.some(([s]) => s === "error") && l.state === "ok") break;
+      await sleep(200);
+    }
+    const path = seen.map(([s, at]) => `${s}@${at}s`).join(" > ");
+    check("outage: one failure shows the quiet retry, three in a row show the error text", seen.some(([s]) => s === "retrying") && seen.some(([s]) => s === "error"), path);
+    check("  ...and once the server is back the feed recovers by itself, no reload (ok again)", seen[seen.length - 1]?.[0] === "ok", path);
+    check("  ...with no overlapping requests and at most one try per interval while failing", page.activityPolls().length >= 4 && page.activityPolls().length <= 6, `${page.activityPolls().length} polls`);
     await page.stopIntercepting();
       } },
     ];
