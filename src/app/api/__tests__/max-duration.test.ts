@@ -37,6 +37,8 @@ const MODEL_ROUTES: Record<string, RouteBudget> = {
   // Approving or rejecting weights changes what the cached summary describes: one refresh call.
   "insights/approve-weights/route.ts": { calls: 1, providerSeconds: LOOP_SECONDS },
   "insights/reject-weights/route.ts": { calls: 1, providerSeconds: LOOP_SECONDS },
+  // Reset demo re-seeds the Insights cache, so the follow-up refresh is a cache hit; it still CAN call a model.
+  "demo/reset/route.ts": { calls: 1, providerSeconds: LOOP_SECONDS },
 };
 
 /** Routes that build the model-capable dependencies but never call a model, with the reason. */
@@ -61,7 +63,7 @@ const maxDurationOf = (text: string): number | null => {
 describe("route time limits vs. the LLM timeout", () => {
   it("every route that can reach a model is listed here (a new one must be added deliberately)", () => {
     const reachesModel = routes
-      .filter((r) => /buildAnalyzeDeps|buildOrderDeps|buildApproveDeps|buildSimulationDeps|getLlmDeps|insights\/runtime|llm\/|lib\/ai\//.test(r.text))
+      .filter((r) => /buildAnalyzeDeps|buildOrderDeps|buildApproveDeps|buildSimulationDeps|buildResetDeps|getLlmDeps|insights\/runtime|llm\/|lib\/ai\//.test(r.text))
       .map((r) => r.file)
       .filter((f) => !(f in NEVER_CALLS_A_MODEL))
       .sort();

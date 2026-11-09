@@ -136,7 +136,15 @@ async function main(): Promise<void> {
     `${pad(`${activityIds.length} seeded activity rows, marked demo data`, 46)}${mark(act?.n === activityIds.length && act.demo === activityIds.length && act.kinds === 3 && act.simulated === 1 && act.orphans === 0)}`,
   );
 
-  const [latest] = await sql<{ id: string }[]>`SELECT id FROM dispute_outcomes ORDER BY created_at DESC LIMIT 1`;
+  // Reset demo and "Restart my demo" each leave ONE audit row (reset_demo_global / reset_demo_session). Visitor activity is
+  // expected too. Neither is a seed problem, so they are listed, never failed.
+  const extra = await sql<{ tool_name: string; n: number }[]>`
+    SELECT tool_name, count(*)::int AS n FROM agent_activity WHERE session_id IS DISTINCT FROM ${SEED_ACTIVITY_SESSION_ID} GROUP BY tool_name ORDER BY tool_name`;
+  const resetRows = extra.filter((e) => e.tool_name.startsWith("reset_demo")).reduce((n, e) => n + e.n, 0);
+  const otherRows = extra.filter((e) => !e.tool_name.startsWith("reset_demo")).reduce((n, e) => n + e.n, 0);
+  console.log(`${pad("non-seed activity rows (tolerated)", 46)}reset_demo*=${resetRows}  visitor=${otherRows}  ${mark(true)}`);
+
+  const [latest] = await sql<{ id: string }[]>`SELECT id FROM dispute_outcomes ORDER BY created_at DESC, id DESC LIMIT 1`;
   const [cnt] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM dispute_outcomes`;
   const [cache] = await sql<{ input_fingerprint: string; used_fallback: boolean; summary: string | null }[]>`
     SELECT input_fingerprint, used_fallback, summary FROM insights_cache LIMIT 1`;

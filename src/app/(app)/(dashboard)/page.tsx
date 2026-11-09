@@ -4,6 +4,7 @@ import { JudgeGuide } from "@/components/dashboard/judge-guide";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { RiskDonut } from "@/components/dashboard/risk-donut";
 import { ResetDemoButton } from "@/components/demo/reset-demo-button";
+import { RestartDemoButton } from "@/components/demo/restart-demo-button";
 import { loadDashboard } from "@/lib/dashboard/load";
 import { money } from "@/lib/disputes/present";
 import { getSessionId } from "@/lib/session";
@@ -22,7 +23,10 @@ export default async function DashboardPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
           <p className="text-xs text-muted-foreground">Figures cover your own activity in this session plus the shared demo history.</p>
         </div>
-        <ResetDemoButton />
+        <div className="flex flex-wrap items-start gap-3">
+          <RestartDemoButton />
+          <ResetDemoButton />
+        </div>
       </header>
 
       <JudgeGuide />

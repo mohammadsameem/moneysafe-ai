@@ -911,7 +911,9 @@ POST /api/insights/reject-weights
 | POST | `/api/insights/reject-weights` | Discard pending proposal |
 | GET | `/api/dashboard` | All dashboard metrics |
 | GET | `/api/activity` | Paginated log (`?refOrderId` / `?refDisputeId`) |
-| POST | `/api/demo/reset` | Atomic reset + re-seed |
+| POST | `/api/demo/reset` | Global reset: delete every visitor's data + re-seed, one transaction; 10 s cooldown (429); logs `reset_demo_global`; never touches `llm_daily_usage` / `llm_rate_limits` |
+| POST | `/api/demo/restart` | "Restart my demo": delete only the caller's own data; leaves the seed, other sessions and the shared learning-loop state alone; logs `reset_demo_session` |
+| POST | `/api/demo/start` | "Start demo": this session's own copies of SEED-C/D/E (idempotent) |
 | GET | `/api/demo/status` | `{ demoMode, db }` — runs `SELECT 1`; **only `/api/*` route exempt from session check** |
 
 ---

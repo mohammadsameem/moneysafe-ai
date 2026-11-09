@@ -58,6 +58,9 @@ export interface InsightsView {
   summary: SummaryView;
 }
 
+/** Shown when the cached summary no longer matches the data (for example after "Restart my demo" removed outcomes). */
+export const STALE_SUMMARY_NOTE = "Showing a rule-based summary of the current data. The written summary is refreshed after the next resolved dispute.";
+
 export async function loadInsights(repo: InsightsRepo): Promise<InsightsView | null> {
   const row = await repo.getActiveWeights();
   if (!row) return null;
@@ -84,7 +87,8 @@ export async function loadInsights(repo: InsightsRepo): Promise<InsightsView | n
       : null;
 
   // A cached summary is only shown while it still describes the current data.
-  const fresh = cache !== null && cache.summary !== null && cache.summary !== "" && cache.inputFingerprint === currentFingerprint(stats, row);
+  const hasText = cache !== null && cache.summary !== null && cache.summary !== "";
+  const fresh = hasText && cache.inputFingerprint === currentFingerprint(stats, row);
   let summary: SummaryView;
   if (fresh && cache) {
     summary = {
@@ -96,7 +100,15 @@ export async function loadInsights(repo: InsightsRepo): Promise<InsightsView | n
     };
   } else {
     const input: InsightsSummaryInput = { stats, current, proposed, counter: row.resolvedSinceLastProposal, recent: [] };
-    summary = { text: ruleBasedInsightsSummary(input), usedFallback: true, note: AI_UNAVAILABLE_NOTE, generatedAt: null, source: "rule_based" };
+    // Missing: nothing was ever written, so AI text is unavailable. Out of date (an outcome was removed
+    // by a session restart, or a refresh failed): the data moved on and the next change rewrites it.
+    summary = {
+      text: ruleBasedInsightsSummary(input),
+      usedFallback: true,
+      note: hasText ? STALE_SUMMARY_NOTE : AI_UNAVAILABLE_NOTE,
+      generatedAt: null,
+      source: "rule_based",
+    };
   }
 
   return {

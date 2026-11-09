@@ -284,8 +284,12 @@ On order and dispute detail pages, shows only entries for that record.
 
 ### 4.8 Demo Utilities
 
-**REQ-DU-01** — Reset demo  
-Atomically truncates non-seed data, re-seeds all canonical records (including the pending weight-change proposal from REQ-DEMO-07), and resets `resolved_since_last_proposal` to 0.
+**REQ-DU-01** — Reset demo (global)  
+Atomically truncates non-seed data, re-seeds all canonical records (including the pending weight-change proposal from REQ-DEMO-07), and resets `resolved_since_last_proposal` to 0.  
+*Notes (checkpoint G):* the reset affects **every** session, in one transaction, and a failure part-way changes nothing. It deletes all visitor orders, disputes (including every Start demo copy and simulated dispute), evidence, approvals, executions, outcomes and activity, then restores the seed: signal weights, the pending proposal, the counter, the insights cache, the historical disputes and outcomes, and the 8 seeded activity rows. It **never** touches `llm_daily_usage` (the global daily cap) or `llm_rate_limits`, and it does not sign anyone out. It writes one `merchant_action` row, `reset_demo_global`, and refuses a second reset within 10 seconds of the last one (HTTP 429, `Retry-After`); the cooldown is global and uses that row, with no extra table. `db:seed:verify` tolerates `reset_demo_*` rows.
+
+**REQ-DU-03** — Restart my demo (session-scoped)  
+*When* a merchant chooses "Restart my demo", *the system shall* delete only that session's own orders, disputes, evidence, approvals, executions, outcomes and activity, so Start demo can recreate fresh copies. It *shall not* change the seed, any other session's data, the shared signal weights, the pending proposal, the resolved-since-last-proposal counter or the insights cache, and it needs no confirmation dialog. It is idempotent, atomic, not subject to the reset cooldown, and logged as a `merchant_action` row, `reset_demo_session`. Because the session's outcome rows are removed, the cached Insights summary may no longer match the data; until the next resolved dispute rewrites it, the page shows a rule-based summary of the current data with a note saying so.
 
 **REQ-DU-02** — Simulate dispute  
 "Simulate dispute" button on shipped order detail pages creates a synthetic open dispute for that order.

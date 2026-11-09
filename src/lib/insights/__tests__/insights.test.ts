@@ -10,7 +10,7 @@ import { DEFAULT_SIGNAL_WEIGHTS, computeRiskScore, evaluateSignals, type SignalW
 import { SEED_PROPOSAL_REASONING, buildSeedBundle } from "@/seed/data";
 import { approveWeights, rejectWeights } from "../decide";
 import { currentFingerprint } from "../fingerprint";
-import { loadInsights } from "../read";
+import { STALE_SUMMARY_NOTE, loadInsights } from "../read";
 import { INSIGHTS_CACHE_ID } from "../repo";
 import { regenerateInsightsSummaryIfStale, type SummaryDeps } from "../summary";
 import { NOW, WEIGHTS_ID, createFakeInsightsRepo, fakeLlmDeps, makeOutcome, withProposal, type FakeInsightsRepo, type FakeOutcome } from "./fakes";
@@ -191,7 +191,8 @@ describe("loadInsights (GET /api/insights never calls a model)", () => {
     await regenerateInsightsSummaryIfStale(SESSION, deps);
     repo.outcomes.push(makeOutcome(5)); // the data moved on; nothing refreshed the cache yet
     const stale = await loadInsights(repo);
-    expect(stale?.summary).toMatchObject({ source: "rule_based", note: AI_UNAVAILABLE_NOTE });
+    // Out of date is not "unavailable": the note says the summary refreshes after the next resolved dispute.
+    expect(stale?.summary).toMatchObject({ source: "rule_based", note: STALE_SUMMARY_NOTE });
     expect(stale?.summary.text).toContain("Of the 5 resolved disputes");
     expect(stale?.summary.text).not.toBe(SUMMARY_TEXT);
   });
