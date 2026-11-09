@@ -53,6 +53,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               type="button"
               onClick={() => dismiss(t.id)}
               aria-label={`Dismiss: ${t.title}`}
+              data-compact
               className="rounded px-1 text-lg leading-none opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {"\u00d7"}

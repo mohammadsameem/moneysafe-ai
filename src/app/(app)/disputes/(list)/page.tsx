@@ -2,6 +2,7 @@ import Link from "next/link";
 import { DemoBadge } from "@/components/badges";
 import { DeadlineCountdown } from "@/components/deadline-countdown";
 import { StartDemoButton } from "@/components/demo/start-demo-button";
+import { COL_FROM_LG } from "@/components/table-columns";
 import { ToneBadge } from "@/components/tone-badge";
 import { formatDate, shortId } from "@/lib/format";
 import { listDisputeViews, type DisputeTab, type DisputeView } from "@/lib/disputes/read";
@@ -88,8 +89,8 @@ function OpenTable({ disputes, renderedAt }: { disputes: DisputeView[]; rendered
             <th scope="col" className={th}>Reason</th>
             <th scope="col" className={`${th} text-right`}>Amount</th>
             <th scope="col" className={th}>Deadline</th>
-            <th scope="col" className={`${th} hidden sm:table-cell`}>Order</th>
-            <th scope="col" className={`${th} hidden md:table-cell`}>Status</th>
+            <th scope="col" className={`${th} ${COL_FROM_LG}`}>Order</th>
+            <th scope="col" className={`${th} ${COL_FROM_LG}`}>Status</th>
           </tr>
         </thead>
         <tbody>
@@ -108,10 +109,10 @@ function OpenTable({ disputes, renderedAt }: { disputes: DisputeView[]; rendered
               <td className={td}>
                 <DeadlineCountdown deadline={d.deadlineAt} renderedAt={renderedAt} />
               </td>
-              <td className={`${td} hidden font-mono sm:table-cell`}>
+              <td className={`${td} font-mono ${COL_FROM_LG}`}>
                 <Link href={`/orders/${d.orderId}`} className="underline-offset-2 hover:underline">{d.orderRef}</Link>
               </td>
-              <td className={`${td} hidden md:table-cell`}>
+              <td className={`${td} ${COL_FROM_LG}`}>
                 <ToneBadge tone={STATUS_TONE[d.status]}>{STATUS_LABEL[d.status]}</ToneBadge>
               </td>
             </tr>
@@ -132,8 +133,8 @@ function ResolvedTable({ disputes }: { disputes: DisputeView[] }) {
             <th scope="col" className={th}>Reason</th>
             <th scope="col" className={`${th} text-right`}>Amount</th>
             <th scope="col" className={th}>Outcome</th>
-            <th scope="col" className={`${th} hidden sm:table-cell`}>Resolved</th>
-            <th scope="col" className={`${th} hidden md:table-cell`}>Order</th>
+            <th scope="col" className={`${th} ${COL_FROM_LG}`}>Resolved</th>
+            <th scope="col" className={`${th} ${COL_FROM_LG}`}>Order</th>
           </tr>
         </thead>
         <tbody>
@@ -156,8 +157,8 @@ function ResolvedTable({ disputes }: { disputes: DisputeView[] }) {
                   <span className="text-muted-foreground">-</span>
                 )}
               </td>
-              <td className={`${td} hidden whitespace-nowrap sm:table-cell`}>{d.resolvedAt ? formatDate(d.resolvedAt) : "-"}</td>
-              <td className={`${td} hidden font-mono md:table-cell`}>
+              <td className={`${td} whitespace-nowrap ${COL_FROM_LG}`}>{d.resolvedAt ? formatDate(d.resolvedAt) : "-"}</td>
+              <td className={`${td} font-mono ${COL_FROM_LG}`}>
                 <Link href={`/orders/${d.orderId}`} className="underline-offset-2 hover:underline">{shortId(d.orderId)}</Link>
               </td>
             </tr>

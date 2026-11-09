@@ -28,6 +28,9 @@ yarn-error.log*
 # local env files
 .env*.local
 
+# QA screenshots (npm run qa:browser)
+/.qa/
+
 # vercel
 .vercel
 

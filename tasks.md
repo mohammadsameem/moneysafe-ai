@@ -816,9 +816,19 @@ Added at checkpoint E. Built right after M3-06.
 
 ### M4-07 · Polish — responsive layout
 
-- [ ] Fix all pages at 375 px mobile (sidebar → hamburger/bottom nav)
-- [ ] Fix all pages at 1280 px desktop
-- [ ] Dispute detail hero fully usable on mobile
+- [x] Fix all pages at 375 px mobile (sidebar → hamburger/bottom nav)
+- [x] Fix all pages at 1280 px desktop
+- [x] Dispute detail hero fully usable on mobile
+
+
+> M4-07 notes (8 new tests; 869 in total):
+>
+> - **Layout:** from 768 px up a sidebar (sticky, with icons); below that a slim top bar (product name + Sign out) and a five-tab bar fixed to the bottom edge (Dashboard, Orders, Disputes, Insights, Activity; labels always shown; safe-area aware), with the content padded so nothing hides behind it. One `NAV_ITEMS` list feeds both (`src/lib/nav.ts`, `src/components/app-nav.tsx`; `sidebar-nav.tsx` is gone). The toasts sit above the bar.
+> - **Phones:** every button in `main` and in dialogs is at least 44 px tall, form fields are 16 px (no zoom-on-focus in iOS Safari), the Open / Resolved tabs are 44 px, and the Orders table drops Buyer and Date below 1024 / 1280 px so it fits without scrolling sideways.
+> - **A bug the 768 px audit found:** with the sidebar on, a 768 px screen leaves ~450 px for content. The Orders page then scrolled sideways by 89 px, although the table sits in its own scroll container. Cause: the risk badge's `sr-only` text (", medium risk") is absolutely positioned, and a scroll container that is not itself positioned does not clip it, so it widened the whole page. Fixed once for every table (`.overflow-x-auto { position: relative }`), the audit now flags absolutely positioned content inside an unpositioned scroller, and the two tables hide low-priority columns while the sidebar narrows the content (`table-columns.ts`) so Risk stays on screen at 768 px. The Insights grid items got `min-w-0` and the change column `whitespace-nowrap`.
+> - **`npm run qa:browser`** (`scripts/qa/browser.ts`, helpers in `scripts/qa/common.ts`): drives a real headless Edge / Chrome over the DevTools protocol with no new dependency. It signs in through the real login form, clicks real buttons, audits 8 pages at 375, 768 and 1280 px (a heading; no sideways scrolling; the right navigation for the width; content clear of the bottom bar; 40 px tap targets on a phone; no console errors, which would include a hydration mismatch), and writes full-page screenshots to `.qa/screens/` (git-ignored). It refuses to run against a non-local URL (it resets the demo) and cleans up its own session. `QA_DIAG=/orders QA_DIAG_WIDTH=768` prints what sticks out on one page.
+> - **Verified live** (real headless Edge, dev server, real Supabase, 165/165, run three times while fixing): login through the form on a phone; Start demo (toast, lands on /disputes with exactly 3 rows); every page at 375, 768 and 1280 px with zero overflow, the correct navigation and zero console errors or hydration warnings; the dispute hero on a phone (95% Strong, Contest, System recommendation, the countdown, the draft in the editable box, the label, Approve inside the screen); Approve (simulated) -> toast, "Action already executed" with a Simulated badge; Won -> toast, "Won (simulated outcome)"; the Dashboard's "$145.00 from simulated outcomes"; Insights Approve change -> toast and the card gone; each of the five bottom tabs navigates and is the only one current; Restart my demo (toast, no dialog, copies gone) and Start demo again; the Reset dialog (opens, fits the screen, Cancel closes it, confirming resets to $320.00 under review, and a second reset shows "Reset is cooling down" with the seconds); a missing dispute is a real 404 with a friendly page and the navigation, on a phone too.
+> - **Not verified:** a real phone or iOS Safari (the emulation sets the viewport, touch and mobile layout, but is not a device); landscape phones; dark mode (none is designed); keyboard-only and screen-reader use beyond the semantic markup (labels, roles, `aria-current`, focus rings are in place; nobody tabbed through it); widths between the three tested ones.
 
 ---
 

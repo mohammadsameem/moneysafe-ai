@@ -35,7 +35,7 @@ export function WeightsTable({ weights }: { weights: WeightView[] }) {
                   </th>
                   <td className="px-2 py-2 text-right font-semibold tabular-nums">{w.current}</td>
                   <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{w.baseline}</td>
-                  <td className={`py-2 pl-2 text-right tabular-nums font-medium ${d.className}`}>
+                  <td className={`whitespace-nowrap py-2 pl-2 text-right text-xs font-medium tabular-nums sm:text-sm ${d.className}`}>
                     <span aria-hidden="true">{d.arrow} </span>
                     {d.text}
                     <span className="sr-only">, {d.spoken}</span>

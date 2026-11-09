@@ -49,11 +49,41 @@
   }
 }
 
+@layer components {
+  /*
+   * sr-only text is absolutely positioned. Inside a scroll container that is not itself positioned, it
+   * is NOT clipped by the container and, sitting at the far right of a wide table, it makes the whole
+   * page scroll sideways. A positioned scroll container clips it.
+   */
+  .overflow-x-auto {
+    position: relative;
+  }
+}
+
 @layer base {
   * {
     @apply border-border;
   }
   body {
     @apply bg-background text-foreground antialiased;
+  }
+
+  /* Phones (below the md breakpoint, 768 px): comfortable touch targets, and no zoom-on-focus in iOS Safari. */
+  @media (max-width: 767px) {
+    main button:not([data-compact]),
+    dialog button:not([data-compact]) {
+      min-height: 2.75rem;
+    }
+    main input:not([type="checkbox"]):not([type="radio"]),
+    main select,
+    main textarea,
+    dialog input,
+    dialog select,
+    dialog textarea {
+      font-size: 16px;
+    }
+    summary {
+      min-height: 2.75rem;
+    }
   }
 }

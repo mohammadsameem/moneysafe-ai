@@ -39,11 +39,11 @@ export default async function InsightsPage() {
       {view.proposal ? <WeightChangeProposal proposal={view.proposal} /> : null}
 
       <div className="grid gap-6 lg:grid-cols-5">
-        <div className="space-y-6 lg:col-span-3">
+        <div className="min-w-0 space-y-6 lg:col-span-3">
           <WeightsTable weights={view.weights} />
           <p className="text-sm text-muted-foreground">{progressText(view.progress)}</p>
         </div>
-        <div className="space-y-6 lg:col-span-2">
+        <div className="min-w-0 space-y-6 lg:col-span-2">
           <OutcomeChart outcomes={view.outcomes} />
           <SummaryCard summary={view.summary} includesDemoData={view.outcomes.includesDemoData} />
         </div>
