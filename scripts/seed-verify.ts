@@ -4,6 +4,7 @@
  * Exits 1 if anything differs from the spec.
  */
 import { closeDb, getSql } from "../src/db/client";
+import { SEED_ACTIVITY_PREFIX, SEED_ACTIVITY_SESSION_ID, seedActivityIds } from "../src/seed/activity";
 import { seedId } from "../src/seed/ids";
 import { computeInsightsFingerprint } from "../src/lib/insights/fingerprint";
 
@@ -122,6 +123,18 @@ async function main(): Promise<void> {
            max(high_relative_value)::int AS h, max(disposable_email)::int AS d, max(repeated_attempts)::int AS a
     FROM signal_weights WHERE is_active`;
   console.log(`${pad("one active weights row, pending proposal, counter 0", 46)}${mark(w?.n === 1 && w.pending === 1 && w.counter === 0 && w.proposed_ft === 23)}`);
+
+  const activityIds = seedActivityIds();
+  const [act] = await sql<{ n: number; demo: number; kinds: number; simulated: number; orphans: number }[]>`
+    SELECT count(*)::int AS n,
+           count(*) FILTER (WHERE session_id = ${SEED_ACTIVITY_SESSION_ID} AND output_summary LIKE ${`${SEED_ACTIVITY_PREFIX}%`})::int AS demo,
+           count(DISTINCT step_type)::int AS kinds,
+           count(*) FILTER (WHERE status = 'simulated')::int AS simulated,
+           count(*) FILTER (WHERE ref_order_id IS NULL AND ref_dispute_id IS NULL)::int AS orphans
+    FROM agent_activity WHERE id IN ${sql(activityIds)}`;
+  console.log(
+    `${pad(`${activityIds.length} seeded activity rows, marked demo data`, 46)}${mark(act?.n === activityIds.length && act.demo === activityIds.length && act.kinds === 3 && act.simulated === 1 && act.orphans === 0)}`,
+  );
 
   const [latest] = await sql<{ id: string }[]>`SELECT id FROM dispute_outcomes ORDER BY created_at DESC LIMIT 1`;
   const [cnt] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM dispute_outcomes`;

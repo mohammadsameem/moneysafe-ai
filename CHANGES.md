@@ -6,6 +6,8 @@ Notable changes to the spec and architecture, newest first. Task-by-task progres
 ## Deviation log
 One line per deviation from the written specs, newest first.
 
+- 2026-11-08 REQ-DEMO / seed: 8 hand-written `agent_activity` rows are seeded (src/seed/activity.ts) so the dashboard feed and /activity are not empty on first load. agent_activity has no is_seed column, so seeded rows are identified by deterministic `seedId("activity", ...)` ids and the marker session id `seed-demo`, and every output summary starts with "Demo data:". Reset demo (M4-05) restores them by id.
+
 - 2026-11-08 BUG FIX src/db/client.ts: `max_pipeline: 1`. postgres.js pipelines several queries on one connection by default, and through the Supavisor transaction pooler a pipelined query hangs until statement_timeout (2 min), holding its transaction open, even on unrelated rows (measured: 2 concurrent queries on a 1-connection pool hang). On Vercel (`max: 1`) any two overlapping queries in one instance would have hung. With the fix, 20 concurrent same-row updates finish in under a second; a regression test runs 16 concurrent queries through the real pool.
 - 2026-11-08 REQ-NFR-14 / M2-03: `analysis_computed_at` doubles as an in-flight claim (`pending:<ISO>|<id>`), taken atomically before any model call; only the claim winner spends LLM budget, and a simultaneous request waits (up to 45 s) and returns the winner's result, or 202 `in_progress`. A failed winner releases the claim; a claim older than 90 s (or malformed) is taken over. Every reader treats a claim as "not analysed".
 

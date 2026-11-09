@@ -25,6 +25,7 @@ export type SeedKind =
   | "artefact"
   | "dispute"
   | "outcome"
-  | "insights";
+  | "insights"
+  | "activity";
 
 export const seedId = (kind: SeedKind, key: string): string => uuidV5(`${kind}:${key}`);

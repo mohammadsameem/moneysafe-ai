@@ -15,6 +15,7 @@ import { getTableColumns, sql } from "drizzle-orm";
 import type { PgTable, PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { Db } from "../db/client";
 import {
+  agentActivity,
   disputeOutcomes,
   disputes,
   evidenceArtefacts,
@@ -23,6 +24,7 @@ import {
   settings,
   signalWeights,
 } from "../db/schema";
+import { buildSeedActivity } from "./activity";
 import { assertSeedConsistency, buildSeedBundle } from "./data";
 
 export interface SeedSummary {
@@ -39,7 +41,8 @@ function excludedSet<T extends PgTable>(table: T): PgUpdateSetSource<T> {
 }
 
 export async function runSeed(db: Db, options: { now?: Date } = {}): Promise<SeedSummary> {
-  const bundle = buildSeedBundle(options.now ?? new Date());
+  const now = options.now ?? new Date();
+  const bundle = buildSeedBundle(now);
   assertSeedConsistency(bundle); // throws before any write if the data disagrees with the spec
 
   const upserted: Record<string, number> = {};
@@ -87,6 +90,14 @@ export async function runSeed(db: Db, options: { now?: Date } = {}): Promise<See
       .values(bundle.insights)
       .onConflictDoUpdate({ target: insightsCache.id, set: excludedSet(insightsCache) });
     upserted.insights_cache = 1;
+
+    // Last: they reference seeded orders and disputes.
+    const activity = buildSeedActivity(now);
+    await tx
+      .insert(agentActivity)
+      .values(activity)
+      .onConflictDoUpdate({ target: agentActivity.id, set: excludedSet(agentActivity) });
+    upserted.agent_activity = activity.length;
   });
 
   return { upserted };
