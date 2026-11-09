@@ -89,28 +89,32 @@
 
 ### M1-04 · Risk scoring engine
 
-- [ ] Implement `src/lib/scoring/signals.ts`:
+- [x] Implement `src/lib/scoring/signals.ts`:
   - `evaluateSignals(order, weights, baselineAvgUsd): SignalResult[]` — `baselineAvgUsd` is always passed in, never queried inside
   - `computeRiskScore(signals): number` — clamp to 100
   - `toVerdict(score): 'ship' | 'verify' | 'hold'`
   - `isDisposableDomain(email): boolean` (blocklist ≥25 domains: mailinator, guerrillamail, yopmail, tempmail, throwaway, sharklasers, trashmail, etc.)
-- [ ] Implement `src/lib/scoring/evidence-completeness.ts` (pure function, no DB access):
+- [x] Implement `src/lib/scoring/evidence-completeness.ts` (pure function, no DB access):
   - `computeEvidenceCompleteness(artefacts: EvidenceArtefact[]): number`
   - Split tracking: +15 if `tracking_events` present (any), +15 if any event has `status = 'Delivered'`
-- [ ] Implement `src/lib/scoring/win-probability.ts`:
+- [x] Implement `src/lib/scoring/win-probability.ts`:
   - `computeBaseWinProbability(completeness, artefacts, reason): number` — rubric per design §6.4
-  - `computeWinProbability(base, llmAdjustment): number` — clamp [0,1]
+  - `computeWinProbability(base, llmAdjustment): number` — clamp **[0.05, 0.95]** (design §6.4)
   - `toWinLikelihoodLabel(prob): 'Strong' | 'Moderate' | 'Weak'`
-- [ ] Implement `src/lib/scoring/recommendation.ts`:
+- [x] Implement `src/lib/scoring/recommendation.ts`:
   - `computeSystemRecommendation(amount, p, feeUsd, effortUsd): 'contest' | 'refund'`
   - Formula: `p * amount - (1 - p) * feeUsd - effortUsd > 0 ? 'contest' : 'refund'`
-- [ ] Export all functions from `src/lib/scoring/index.ts`
+  - Also exports `contestExpectedValue(...)` (the EV itself), used by the seed's reasoning text and the future UI
+- [x] Export all functions from `src/lib/scoring/index.ts`
+- [x] Single implementation: `src/seed/rubric.ts` (the seed-only mirror) was deleted and `src/seed/data.ts` now computes everything through `src/lib/scoring`. Verified behaviour-preserving: the seed bundle at a fixed timestamp is byte-identical (SHA-256) before and after the change. `src/lib/scoring` has no imports from `src/db`.
+
+> M1-04 notes: scoring takes snake_case weights (`SignalWeightValues`, keyed like `signal_breakdown[].signal`), so the caller maps a `signal_weights` row to that shape (M1-10). Extra exports beyond the list: `trackingStatuses`, `DEFAULT_SIGNAL_WEIGHTS`, the threshold constants, `contestExpectedValue`. `toWinLikelihoodLabel` has no unit test in the M1-05 list; it is exercised only by the seed consistency guard, which checks the three open-dispute labels.
 
 ---
 
 ### M1-05 · Unit tests — scoring
 
-- [ ] `src/lib/scoring/__tests__/signals.test.ts`:
+- [x] `src/lib/scoring/__tests__/signals.test.ts` (14 tests):
   - Each signal in isolation (6 tests): verify only the targeted signal fires
   - All 6 signals active → score = 100 (clamp verified)
   - Verdict boundaries: score 39 → 'ship', 40 → 'verify', 69 → 'verify', 70 → 'hold'
@@ -122,13 +126,13 @@
     - SEED-F ($320, returning, rush, US→DE, disposable email) → **70**, 'hold'
   - Weight-change test: lower `country_mismatch` to 5 → SEED-B score changes to 40, still 'verify'
 
-- [ ] `src/lib/scoring/__tests__/evidence-completeness.test.ts`:
+- [x] `src/lib/scoring/__tests__/evidence-completeness.test.ts` (4 tests):
   - Full artefacts + Delivered → 100
   - Full artefacts + In Transit only → 85 (missing Delivered +15)
   - No tracking events → 70 (missing events +15 and Delivered +15)
   - No artefacts → 0
 
-- [ ] `src/lib/scoring/__tests__/win-probability.test.ts`:
+- [x] `src/lib/scoring/__tests__/win-probability.test.ts` (7 tests):
   - SEED-C (completeness=100, Delivered, INR) → A=40, B=30, C=20; base = 90/90 = 1.000; `computeWinProbability(1.000, 0)` = **0.95** (upper clamp)
   - SEED-D (completeness≈60, no events, NAD, no comms) → A=24, B=0 (NAD — no delivery bonus), C=0; base = 24/90 ≈ 0.267; `computeWinProbability(0.267, 0)` = **0.267**
   - SEED-E (completeness=75, In Transit, INR) → A=30, B=0, C=10; base = 40/90 ≈ 0.444; `computeWinProbability(0.444, 0)` = **0.444**
@@ -137,7 +141,7 @@
   - `computeWinProbability(0.0, -0.2)` = **0.05** (lower clamp at 0.05)
   - `computeWinProbability(0.5, 0.1)` = **0.6** (no clamp needed)
 
-- [ ] `src/lib/scoring/__tests__/recommendation.test.ts`:
+- [x] `src/lib/scoring/__tests__/recommendation.test.ts` (4 tests):
   - `($145, 0.90, 20, 10)` → 'contest' (EV = 118.5)
   - `($38, 0.40, 20, 10)` → 'refund' (EV = −6.8)
   - `($60, 0.30, 20, 10)` → 'refund' (EV = −6.0)

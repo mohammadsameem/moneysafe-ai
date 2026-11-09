@@ -3,7 +3,8 @@
  *
  * - No LLM calls: every piece of explanatory text below is hand-written.
  * - Derived numbers (risk scores, completeness, win probabilities, recommendations) are computed
- *   from the seeded evidence via ./rubric, then cross-checked by assertSeedConsistency().
+ *   from the seeded evidence via src/lib/scoring (the same code the app uses), then cross-checked
+ *   against the expected numbers by assertSeedConsistency().
  * - Timestamps are relative to `now`, so seeded data always looks fresh and the open disputes
  *   never expire. Open seed disputes additionally store deadline_offset_hours; the app computes
  *   deadline_at from it at read time (design 3.4), so the stored deadline_at is a placeholder.
@@ -19,21 +20,28 @@ import type {
 } from "../db/schema";
 import { computeInsightsFingerprint } from "../lib/insights/fingerprint";
 import { seedId } from "./ids";
+// The single scoring implementation. The seed computes its derived numbers with the same
+// functions the app uses, so the unit tests in src/lib/scoring cover what the seed relies on.
 import {
-  SEED_BASELINE_AVG_USD,
-  SEED_CHARGEBACK_FEE_USD,
-  SEED_CONTEST_EFFORT_USD,
-  SEED_DEFAULT_WEIGHTS,
-  mirrorBaseWinProbability,
-  mirrorCompleteness,
-  mirrorLabel,
-  mirrorRecommendation,
-  mirrorRiskScore,
-  mirrorSignals,
-  mirrorVerdict,
-  mirrorWinProbability,
-  type ArtefactLike,
-} from "./rubric";
+  DEFAULT_SIGNAL_WEIGHTS,
+  computeBaseWinProbability,
+  computeEvidenceCompleteness,
+  computeRiskScore,
+  computeSystemRecommendation,
+  computeWinProbability,
+  contestExpectedValue,
+  evaluateSignals,
+  toVerdict,
+  toWinLikelihoodLabel,
+  trackingStatuses,
+  type ArtefactInput,
+} from "../lib/scoring";
+
+/** settings.merchant_avg_order_value_usd (fixed baseline; REQ-ORD-02). */
+const BASELINE_AVG_USD = 85;
+/** Defaults of CHARGEBACK_FEE_USD / CONTEST_EFFORT_USD. The seeded reasoning text quotes these figures. */
+const CHARGEBACK_FEE_USD = 20;
+const CONTEST_EFFORT_USD = 10;
 
 export interface SeedBundle {
   settings: NewSettings;
@@ -430,10 +438,8 @@ const DISPUTE_SPECS: DisputeSpec[] = [
 // ---------------------------------------------------------------------------
 // Text helpers for evidence labels / gaps
 // ---------------------------------------------------------------------------
-function evidenceUsedLabels(arts: ArtefactLike[]): string[] {
-  const statuses = arts
-    .filter((a) => a.artefactType === "tracking_events")
-    .flatMap((a) => (a.payload.events as { status: string }[]).map((e) => e.status));
+function evidenceUsedLabels(arts: ArtefactInput[]): string[] {
+  const statuses = trackingStatuses(arts);
   const has = (t: string) => arts.some((a) => a.artefactType === t);
   const labels: string[] = [];
   if (has("invoice_summary")) labels.push("Invoice / order summary");
@@ -451,10 +457,8 @@ function evidenceUsedLabels(arts: ArtefactLike[]): string[] {
   return labels;
 }
 
-function evidenceGapLabels(arts: ArtefactLike[]): string[] {
-  const statuses = arts
-    .filter((a) => a.artefactType === "tracking_events")
-    .flatMap((a) => (a.payload.events as { status: string }[]).map((e) => e.status));
+function evidenceGapLabels(arts: ArtefactInput[]): string[] {
+  const statuses = trackingStatuses(arts);
   const gaps: string[] = [];
   if (statuses.length === 0) gaps.push("No carrier scan events on file");
   else if (!statuses.includes("Delivered")) gaps.push("No Delivered scan: tracking stops at In Transit");
@@ -472,7 +476,7 @@ export function buildSeedBundle(now: Date = new Date()): SeedBundle {
   // ---- orders + evidence ----------------------------------------------------
   const orders: NewOrder[] = [];
   const artefacts: NewEvidenceArtefact[] = [];
-  const artefactsByOrder = new Map<string, ArtefactLike[]>();
+  const artefactsByOrder = new Map<string, ArtefactInput[]>();
   const orderScore = new Map<string, { score: number; verdict: "ship" | "verify" | "hold" }>();
 
   for (const spec of ORDER_SPECS) {
@@ -543,20 +547,24 @@ export function buildSeedBundle(now: Date = new Date()): SeedBundle {
         createdAt: r.created,
       });
     }
-    const arts: ArtefactLike[] = rows.map((r) => ({ artefactType: r.artefactType, payload: r.payload }));
+    const arts: ArtefactInput[] = rows.map((r) => ({ artefactType: r.artefactType, payload: r.payload }));
     artefactsByOrder.set(spec.key, arts);
 
-    const signals = mirrorSignals({
-      buyerEmail: spec.email,
-      buyerIsFirstTime: spec.firstTime,
-      paymentAttemptCount: 1,
-      shippingMethod: spec.shippingMethod,
-      billingCountry: "US",
-      shippingCountry: spec.shippingCountry,
-      amountUsd: spec.amount,
-    });
-    const score = mirrorRiskScore(signals);
-    const verdict = mirrorVerdict(score);
+    const signals = evaluateSignals(
+      {
+        buyerEmail: spec.email,
+        buyerIsFirstTime: spec.firstTime,
+        paymentAttemptCount: 1,
+        shippingMethod: spec.shippingMethod,
+        billingCountry: "US",
+        shippingCountry: spec.shippingCountry,
+        amountUsd: spec.amount,
+      },
+      DEFAULT_SIGNAL_WEIGHTS,
+      BASELINE_AVG_USD,
+    );
+    const score = computeRiskScore(signals);
+    const verdict = toVerdict(score);
     orderScore.set(spec.key, { score, verdict });
 
     orders.push({
@@ -577,7 +585,7 @@ export function buildSeedBundle(now: Date = new Date()): SeedBundle {
       aiExplanation: spec.risk?.explanation ?? null,
       usedFallback: false,
       verificationDraft: spec.risk?.verificationDraft ?? null,
-      evidenceCompleteness: shipment ? mirrorCompleteness(arts) : null,
+      evidenceCompleteness: shipment ? computeEvidenceCompleteness(arts) : null,
       signalBreakdown: signals,
       weightsId,
       sessionId: null,
@@ -598,12 +606,12 @@ export function buildSeedBundle(now: Date = new Date()): SeedBundle {
     const amount = orderAmount.get(spec.orderKey)!;
     const risk = orderScore.get(spec.orderKey)!;
 
-    const baseExact = mirrorBaseWinProbability(arts, spec.reason);
+    const completeness = computeEvidenceCompleteness(arts);
+    const baseExact = computeBaseWinProbability(completeness, arts, spec.reason);
     const base = round4(baseExact);
-    const winProbability = round4(mirrorWinProbability(baseExact, 0));
-    const recommendation = mirrorRecommendation(amount, baseExact);
-    const completeness = mirrorCompleteness(arts);
-    const ev = baseExact * amount - (1 - baseExact) * SEED_CHARGEBACK_FEE_USD - SEED_CONTEST_EFFORT_USD;
+    const winProbability = round4(computeWinProbability(baseExact, 0));
+    const recommendation = computeSystemRecommendation(amount, baseExact, CHARGEBACK_FEE_USD, CONTEST_EFFORT_USD);
+    const ev = contestExpectedValue(amount, baseExact, CHARGEBACK_FEE_USD, CONTEST_EFFORT_USD);
     const createdAt = at(now, -spec.createdHoursAgo);
 
     const common = {
@@ -615,7 +623,7 @@ export function buildSeedBundle(now: Date = new Date()): SeedBundle {
       baseWinProbability: base,
       llmAdjustment: 0, // seeded analyses never use the LLM
       winProbability,
-      winLikelihoodLabel: mirrorLabel(winProbability),
+      winLikelihoodLabel: toWinLikelihoodLabel(winProbability),
       systemRecommendation: recommendation,
       overrideRecommendation: null,
       finalRecommendation: recommendation,
@@ -689,7 +697,7 @@ export function buildSeedBundle(now: Date = new Date()): SeedBundle {
   // ---- settings + signal weights (with a pending proposal) -------------------
   const settings: NewSettings = {
     id: seedId("settings", "main"),
-    merchantAvgOrderValueUsd: SEED_BASELINE_AVG_USD,
+    merchantAvgOrderValueUsd: BASELINE_AVG_USD,
     createdAt: at(now, -60 * DAY),
     updatedAt: at(now, -60 * DAY),
   };
@@ -697,12 +705,12 @@ export function buildSeedBundle(now: Date = new Date()): SeedBundle {
   const proposalCreatedAt = at(now, -6);
   const weights: NewSignalWeights = {
     id: weightsId,
-    countryMismatch: SEED_DEFAULT_WEIGHTS.country_mismatch,
-    firstTimeHighValue: SEED_DEFAULT_WEIGHTS.first_time_high_value,
-    rushShipping: SEED_DEFAULT_WEIGHTS.rush_shipping,
-    highRelativeValue: SEED_DEFAULT_WEIGHTS.high_relative_value,
-    disposableEmail: SEED_DEFAULT_WEIGHTS.disposable_email,
-    repeatedAttempts: SEED_DEFAULT_WEIGHTS.repeated_attempts,
+    countryMismatch: DEFAULT_SIGNAL_WEIGHTS.country_mismatch,
+    firstTimeHighValue: DEFAULT_SIGNAL_WEIGHTS.first_time_high_value,
+    rushShipping: DEFAULT_SIGNAL_WEIGHTS.rush_shipping,
+    highRelativeValue: DEFAULT_SIGNAL_WEIGHTS.high_relative_value,
+    disposableEmail: DEFAULT_SIGNAL_WEIGHTS.disposable_email,
+    repeatedAttempts: DEFAULT_SIGNAL_WEIGHTS.repeated_attempts,
     isActive: true,
     // Counter stays at 0: a proposal is already pending, so it must not re-trigger (REQ-LL-02).
     resolvedSinceLastProposal: 0,
@@ -731,7 +739,7 @@ export function buildSeedBundle(now: Date = new Date()): SeedBundle {
       outcomeCount: outcomes.length,
       latestOutcomeId: latestOutcome.id!,
       proposalCreatedAt,
-      weights: SEED_DEFAULT_WEIGHTS,
+      weights: DEFAULT_SIGNAL_WEIGHTS,
     }),
     generatedAt: at(now, 0),
   };
