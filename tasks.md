@@ -347,13 +347,25 @@
 
 ### M2-02 · Dispute analysis engine
 
-- [ ] `src/lib/ai/schemas.ts` additions: `DisputeAnalysisSchema`, `DraftResponseSchema`
-- [ ] `src/lib/ai/tools.ts` additions: `dispute_analysis`, `dispute_draft_response` tool definitions
-- [ ] `src/lib/ai/prompts.ts` additions: `buildDisputeAnalysisPrompt` (includes `base_win_probability` and `system_recommendation` in `<data>`), `buildDraftResponsePrompt`
-- [ ] `src/lib/ai/dispute-analyst.ts`:
+- [x] `src/lib/ai/schemas.ts` additions: `DisputeAnalysisSchema`, `DraftResponseSchema`
+- [x] `src/lib/ai/tools.ts` additions: `dispute_analysis`, `dispute_draft_response` tool definitions
+- [x] `src/lib/ai/prompts.ts` additions: `buildDisputeAnalysisPrompt` (includes `base_win_probability` and `system_recommendation` in `<data>`), `buildDraftResponsePrompt`
+- [x] `src/lib/ai/dispute-analyst.ts`:
   - `analyseDispute(dispute, artefacts, base, systemRec)` — `tool_choice: { type: 'tool', name: 'dispute_analysis' }`; clamps `llm_adjustment`; computes `win_probability`, label, `final_recommendation`, `recommendation_source`
   - `draftDisputeResponse(dispute, artefacts)` — `tool_choice: { type: 'tool', name: 'dispute_draft_response' }`
   - Both use `callWithFallback`
+
+
+> M2-02 notes (64 new tests; 462 in total, all offline with `fetch` faked):
+>
+> - **Built:** `schemas.ts` (`DisputeAnalysisSchema`, `DraftResponseSchema`), `tools.ts` (`dispute_analysis`, `dispute_draft_response`), `prompts.ts` (`buildDisputeAnalysisPrompt`, `buildDraftResponsePrompt`), `rule-based.ts` additions, `dispute-analyst.ts` (`assessDispute`, `analyseDispute`, `draftDisputeResponse`, `fallbackDraft`). `tool_choice` is the OpenAI form, pinned by name, as everywhere else (the `{ type: 'tool', name }` form in the task text is the retired Anthropic one; see CHANGES.md).
+> - **The system owns every number.** `assessDispute` (pure) computes completeness, base win probability, the EV and the recommendation from `src/lib/scoring`. The model returns only an adjustment, reasoning, an optional override and two short lists. New pure helpers live in `src/lib/scoring`, not beside the model code: `clampLlmAdjustment` (to +/-0.1; NaN or Infinity count as 0) and `resolveFinalRecommendation`. The tool asks for -0.1..0.1; the zod schema tolerates +/-0.5 and the system clamps (spec).
+> - **Override rules:** a different override wins and is labelled `ai_adjusted`; an override equal to the system's is not an override; **an override whose reasoning is under 20 characters is ignored** (the merchant must be told why; this is a small addition to REQ-DIS-03).
+> - **Fallback (REQ-DIS-03):** no key, spent budget, provider outage or an answer that fails validation gives the system recommendation, `win_probability`, `llm_adjustment` and the label all null (so the UI shows no meter), a rule-based reasoning ending \"The AI step was unavailable...\", and evidence lists from the shared label functions. The draft falls back to a factual template built from the evidence on file.
+> - **Untrusted input:** the buyer message is escaped, capped at 1000 characters and only placed in `<data>`. The model is sent counts of messages, never their text, and never the buyer's email, name or address (tested). The seed and the live analysis now share one set of evidence label functions (`src/lib/evidence/labels.ts`); a SHA-256 of the seed bundle at a fixed timestamp was identical before and after the move.
+> - **No write tool is reachable from the model:** a test fails if any file under `src/lib/ai` imports the PayPal layer, and another asserts the tool list is exactly the four read-only tools with no action-like names.
+> - **Also added:** `getCostAssumptions()` in `env.ts` (fee 20 and effort 10 by default; a bad value throws naming the variable, not the value), `src/lib/evidence/summary.ts` (facts and prompt lines from artefacts, tolerant of malformed payloads), and `callStructured` now accepts schemas with `.transform()`.
+> - **Not verified:** no real model has answered a dispute prompt yet. That is covered by the live check in M2-03, which runs the whole analysis through the real providers.
 
 ---
 
