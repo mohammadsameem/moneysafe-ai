@@ -5,6 +5,8 @@ import { formatDate, formatUsd, shortId, signalLabel } from "@/lib/format";
 import { createDrizzleReadRepo, toOrderDetail } from "@/lib/orders/queries";
 import { ORDER_NOTICES, isOrderNoticeKey } from "@/lib/orders/notices";
 import { getSessionId } from "@/lib/session";
+import { ActivityFeed } from "@/components/activity/activity-feed";
+import { listActivity } from "@/lib/activity/queries";
 import { EvidenceVault } from "@/components/evidence/evidence-vault";
 import { isDemoModeEnabled } from "@/lib/env";
 import { getOrderEvidence } from "@/lib/orders/evidence-service";
@@ -21,6 +23,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const order = toOrderDetail(row);
   const evidence = await getOrderEvidence(row.id, sessionId!, buildOrderEvidenceDeps());
   const owned = !row.isSeed && row.sessionId === sessionId;
+  const activity = await listActivity(sessionId!, { refOrderId: row.id, pageSize: 10 });
   const notice = isOrderNoticeKey(searchParams.notice) ? ORDER_NOTICES[searchParams.notice] : null;
   const scored = order.riskScore !== null;
   const active = order.signalBreakdown.filter((s) => s.active);
@@ -122,6 +125,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           {order.usedFallback ? <p className="mt-3 text-xs text-muted-foreground">{FALLBACK_NOTE}</p> : null}
         </section>
       ) : null}
+
+      <ActivityFeed initial={activity} refOrderId={row.id} title="Activity for this order" />
     </div>
   );
 }

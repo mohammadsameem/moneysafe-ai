@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { DemoBadge } from "@/components/badges";
 import { DeadlineCountdown } from "@/components/deadline-countdown";
+import { ActivityFeed } from "@/components/activity/activity-feed";
+import { listActivity } from "@/lib/activity/queries";
 import { AnalysisTrigger } from "@/components/disputes/analysis-trigger";
 import { ApprovalPanel } from "@/components/disputes/approval-panel";
 import { DisputeTimeline } from "@/components/disputes/dispute-timeline";
@@ -26,6 +28,7 @@ export default async function DisputeDetailPage({ params }: { params: { id: stri
   if (!detail) notFound();
   const { view, panel, willSimulate, renderedAt } = detail;
   const timeline = buildTimeline(detail);
+  const activity = await listActivity(sessionId!, { refDisputeId: view.id, pageSize: 10 });
   const analysis = view.analysis;
   const resolved = isResolvedStatus(view.status);
 
@@ -90,6 +93,7 @@ export default async function DisputeDetailPage({ params }: { params: { id: stri
         </div>
       )}
       {analysis === null ? <DisputeTimeline steps={timeline} /> : null}
+      <ActivityFeed initial={activity} refDisputeId={view.id} title="Activity for this dispute" />
     </div>
   );
 }

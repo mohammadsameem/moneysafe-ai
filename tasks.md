@@ -596,10 +596,18 @@
 
 ### M3-05 · Agent Activity log
 
-- [ ] `GET /api/activity` — paginated (pageSize=20); `?refOrderId` / `?refDisputeId` filters
-- [ ] Activity full page (`/activity`): reverse-chrono; 5 s polling; filter bar; expandable rows; `<SimulatedBadge>`
-- [ ] `<ActivityFeed entries limit />` component
-- [ ] Wire to order detail (filtered) and dispute detail (filtered)
+- [x] `GET /api/activity` — paginated (pageSize=20); `?refOrderId` / `?refDisputeId` filters
+- [x] Activity full page (`/activity`): reverse-chrono; 5 s polling; filter bar; expandable rows; `<SimulatedBadge>`
+- [x] `<ActivityFeed entries limit />` component
+- [x] Wire to order detail (filtered) and dispute detail (filtered)
+
+
+> M3-05 notes (11 new tests; 680 in total):
+>
+> - **`GET /api/activity`** (`src/lib/activity/queries.ts`): newest first, 20 per page (`?page`, `?pageSize` up to 50), filters `?refOrderId`, `?refDisputeId` (UUIDs), `?stepType`, `?status` (enums); bad values are 400. **Visibility:** the session's own rows plus the seeded demo rows, never another session's (tested live with two sessions). Session ids are never returned; seeded rows carry `isDemo`.
+> - **`<ActivityFeed>`** (`src/components/activity/activity-feed.tsx`): polls every 5 s while the tab is visible; each row shows a step-type icon, tool name, status badge (with `<SimulatedBadge>` for simulated steps), Demo data badge for seeded rows, time and duration, and expands to the input and output summaries. The full **`/activity`** page adds a step-type and status filter bar and Load more. The order and dispute detail pages show the feed filtered to that record (REQ-AA-03). The sidebar link is live.
+> - **Verified live** (dev server, real Supabase, two sessions): `/activity` shows the 8 seeded rows with Demo data badges, tool names, status and Simulated badges, durations and expandable rows; the API returns page 1 of 20 with the 8 seeded rows; bad filters 400; no session 401; another session's new order activity is invisible to this session and visible to its own; SEED-F's order page shows its `score_order` and `risk_explanation` rows and SEED-E's dispute page its simulated `get_dispute` row.
+> - **Not verified:** the 5 s polling and the filters in a real browser (they call the same API, which was checked).
 
 ---
 
