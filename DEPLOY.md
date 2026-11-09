@@ -91,3 +91,53 @@ Put the public URL in the README (task M5-01) and in the Devpost write-up (task 
 | AI text always says "AI unavailable" | No `LLM_API_KEY`, the daily cap or the hourly per-session limit (10 calls) was reached, or the provider is down. The app still works with rule-based text |
 | Build fails on Vercel but passes locally | Compare Node versions (Project Settings > General > Node.js Version) and look at the first error in the build log |
 | Function times out | The order return route allows up to 60 s (`maxDuration`). If your Vercel plan caps it lower, lower `maxDuration` in `src/app/api/orders/route.ts` and `paypal-return/route.ts` |
+
+## 8. Steps only the owner can do (M4-08 and M4-08b)
+
+Everything below needs your Vercel and Supabase accounts. All three scripts print pass/fail lines and never print a secret. Run them from your machine with `.env.local` in place.
+
+**A. Database (once, before or right after the first deploy)**
+
+1. `npm run db:migrate` then `npm run db:check`. The schema has not changed since the first migration, so this is a no-op if you already migrated.
+2. `npm run db:seed` if the database is empty, then `npm run db:seed:verify` must print `ALL CHECKS PASSED`.
+
+**B. Deploy**
+
+3. Set the variables from section 3 in Vercel (Production, and Preview if you want it). `NEXTAUTH_URL` must be the exact URL you will open.
+4. Deploy, then open `https://<your-url>/api/demo/status`: it should print `{"demoMode":...,"db":"ok"}`.
+
+**C. Smoke test the production URL (read-only, safe on the real site)**
+
+```powershell
+$env:QA_BASE = "https://<your-url>"
+npm run qa:smoke
+```
+
+It must end with `ALL CHECKS PASSED` (22 checks). It writes nothing. If `DATABASE_URL` is in `.env.local` it also proves that reading the seeded pages spent no model call.
+
+**D. Verify the budget guard on a preview deployment (M4-08b)**
+
+The daily counter is global and shared by every deployment on the same database, so do this when nobody is using the demo.
+
+1. `npm run qa:budget -- --print-cap` prints a number: today's usage plus 3.
+2. In Vercel, add `LLM_DAILY_CAP=<that number>` and `DEMO_MODE=true` to a **Preview** deployment only, and redeploy that preview. (Not to Production.)
+3. Run:
+
+```powershell
+$env:QA_BASE = "https://<preview-url>"
+$env:QA_ALLOW_REMOTE = "1"
+$env:QA_EXPECT_CAP = "<that number>"
+npm run qa:budget
+```
+
+   It spends the remaining 3 calls, then creates 4 more demo orders and checks that each is created (not a 429), keeps its rule-based score, shows "AI unavailable", has an `llm_budget_exceeded` row, and that the seeded disputes and Insights still load. It deletes its own orders and re-seeds the shared demo state, so it also resets any judge activity.
+4. Delete the preview's `LLM_DAILY_CAP` and `DEMO_MODE` variables (Production keeps `LLM_DAILY_CAP=200`). The counter itself starts again at 00:00 UTC.
+
+**E. Cron**
+
+5. Vercel > Project > Settings > Cron Jobs: the `/api/demo/status` job is listed. Press **Run**; the log should show a 200. (Cron jobs run only on production deployments.)
+
+**F. By hand on production**
+
+6. Sign in, press **Start demo**, open the SEED-C copy, **Approve** it: the "Simulated" badge appears. The "Demo data" badges show on the seeded rows.
+7. Retry flow: with `DEMO_MODE=false`, approve a real (non-seed) dispute; a failure should show an error with a **Retry** button, and the retry reuses the same `PayPal-Request-Id`. `qa:live` and the unit tests cover this locally. The sandbox cannot hand this app a dispute, so it can only be seen by forcing a PayPal error.

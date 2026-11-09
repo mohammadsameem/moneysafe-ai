@@ -836,9 +836,20 @@ Added at checkpoint E. Built right after M3-06.
 
 - [ ] Re-migrate and re-seed production Supabase after M4 schema is finalised
 - [ ] Set all final env vars in Vercel; deploy
-- [ ] Add `vercel.json` with keep-alive cron: `{ "crons": [{ "path": "/api/demo/status", "schedule": "0 12 */3 * *" }] }` (pings every 3 days to prevent cold-start spin-down)
+- [x] Add `vercel.json` with keep-alive cron: `{ "crons": [{ "path": "/api/demo/status", "schedule": "0 12 */3 * *" }] }` (pings every 3 days to prevent cold-start spin-down)
 - [ ] Smoke-test all pages with seed data on production URL
 - [ ] Verify simulated badge, demo badge, and retry flow on production
+
+
+> M4-08 / M4-08b notes (882 tests): everything that does not need the production accounts is done and verified locally; the rest is listed under "Steps only the owner can do" in `DEPLOY.md`.
+>
+> - **Already in place:** `vercel.json` holds the keep-alive cron exactly as specified (`/api/demo/status`, `0 12 */3 * *`); `DEPLOY.md` covers the Supabase strings, Vercel setup and the env var table.
+> - **Schema:** no change since the initial migration (`drizzle-kit generate` prints "No schema changes, nothing to migrate"), so "re-migrate after M4" means only: run `npm run db:migrate` (a no-op if already applied), then `npm run db:check` and `npm run db:seed:verify` against production. Both pass on the database `.env.local` points to, which is the same Supabase project the deployment will use.
+> - **Production build:** `npm run build` compiles and generates all pages.
+> - **`npm run qa:smoke`** (`scripts/qa/smoke.ts`) is READ-ONLY and safe to point at production (`QA_BASE=https://... npm run qa:smoke`): `/api/demo/status` is 200 with `db: ok`; all 20 other API routes answer 401 to GET and POST without a session (found by scanning `src/app/api`, so a new route cannot be forgotten); a page without a session redirects to `/login`; after signing in, 10 seeded orders with "Demo data" badges and SEED-A Ship 0 / SEED-B Verify 55 / SEED-F Hold 70; the dispute inbox with 3 shared examples; SEED-C 95% Strong, SEED-D 27% Weak, SEED-E 44% Moderate; Dashboard $320.00 under review and its 7 API keys; Insights and Agent Activity render; a missing record is a real 404; and (with `DATABASE_URL`) reading all of it spent no model call. 22/22 locally.
+> - **`npm run qa:budget`** (`scripts/qa/budget-guard.ts`, M4-08b) drives the guard end to end. The task says "set `LLM_DAILY_CAP=3`", but the daily counter is global, shared by every deployment on the same database, and never reset, so on a day with prior use a cap of 3 is already exhausted. The script works from the real counter: `npm run qa:budget -- --print-cap` prints `used today + 3`; start the server with that cap; `QA_EXPECT_CAP=<n> npm run qa:budget` spends exactly the remaining 3 calls, then creates 4 more orders. Verified locally (94 -> 97 of 97): the 4 orders are created (201, never 429 or 5xx) with their rule-based score (hold/85), flagged as fallback, each with an `llm_budget_exceeded` activity row (status `fallback`), the order page shows "AI unavailable — showing rule-based result.", the counter stays at 97, the seeded disputes / Insights / Dashboard / Agent Activity / SEED-B load with no call spent, unauthenticated `/api/*` answers 401, and `/api/demo/status` is 200 `db: ok`. 22/22. It removes its own orders; the day's counter cannot be reset and starts again at 00:00 UTC.
+> - **A gap the smoke test found (M4-09 step 4):** the SEED-F page did not show "$320 > $255 threshold". The signal table now adds one line under the two amount-based signals when they fire (`signalDetail`, `src/lib/orders/signal-detail.ts`): "$320.00 > 3 × $85.00 usual order = $255.00" and "$210.00 > $200.00 for a first-time buyer".
+> - **Not verified here (needs the owner's accounts):** the Vercel deployment itself, the cron actually firing on Vercel, `LLM_DAILY_CAP=3` on a real preview, the production URL smoke test, and the retry flow on production.
 
 ---
 
@@ -851,6 +862,9 @@ The guard itself is built in M1-09b. This task verifies it end to end.
 - [ ] Confirm an unauthenticated `curl` to any `/api/*` route returns 401 except `/api/demo/status`
 - [ ] Confirm the keep-alive cron hits `/api/demo/status` and the response includes `db: 'ok'`
 - [ ] Restore `LLM_DAILY_CAP=200`
+
+
+> M4-08b notes: verified end to end on a LOCAL server with `npm run qa:budget` (22/22, see the M4-08 notes above for what it proves and why the cap is `used today + 3` rather than a literal 3). The five boxes below stay open because each one is about the deployed preview or production; the owner runs them with the commands in `DEPLOY.md` section 8.
 
 ---
 

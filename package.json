@@ -16,7 +16,9 @@
     "db:seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
     "db:seed:verify": "tsx --env-file-if-exists=.env.local scripts/seed-verify.ts",
     "qa:live": "tsx --env-file-if-exists=.env.local scripts/qa/live.ts",
-    "qa:browser": "tsx --env-file-if-exists=.env.local scripts/qa/browser.ts"
+    "qa:browser": "tsx --env-file-if-exists=.env.local scripts/qa/browser.ts",
+    "qa:smoke": "tsx --env-file-if-exists=.env.local scripts/qa/smoke.ts",
+    "qa:budget": "tsx --env-file-if-exists=.env.local scripts/qa/budget-guard.ts"
   },
   "dependencies": {
     "class-variance-authority": "0.7.1",
