@@ -12,6 +12,8 @@ import { EvidenceVault } from "@/components/evidence/evidence-vault";
 import { isDemoModeEnabled } from "@/lib/env";
 import { getOrderEvidence } from "@/lib/orders/evidence-service";
 import { buildOrderEvidenceDeps } from "@/lib/orders/runtime";
+import { createDrizzleOrdersRepo } from "@/lib/orders/repo";
+import { signalDetail } from "@/lib/orders/signal-detail";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +30,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const notice = isOrderNoticeKey(searchParams.notice) ? ORDER_NOTICES[searchParams.notice] : null;
   const scored = order.riskScore !== null;
   const active = order.signalBreakdown.filter((s) => s.active);
+  const baselineAvgUsd = scored ? await createDrizzleOrdersRepo().getBaselineAvgUsd() : 0;
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -86,7 +89,12 @@ export default async function OrderDetailPage({ params, searchParams }: { params
                 <tbody>
                   {order.signalBreakdown.map((s) => (
                     <tr key={s.signal} className={`border-t ${s.active ? "" : "text-muted-foreground"}`}>
-                      <th scope="row" className="py-1.5 pr-4 text-left font-normal">{signalLabel(s.signal)}</th>
+                      <th scope="row" className="py-1.5 pr-4 text-left font-normal">
+                        {signalLabel(s.signal)}
+                        {s.active && signalDetail(s.signal, order.amountUsd, baselineAvgUsd, order.currency) ? (
+                          <span className="block text-xs text-muted-foreground">{signalDetail(s.signal, order.amountUsd, baselineAvgUsd, order.currency)}</span>
+                        ) : null}
+                      </th>
                       <td className="py-1.5 pr-4">{s.active ? "Yes" : "No"}</td>
                       <td className="py-1.5 text-right tabular-nums">{s.active ? `+${s.weight}` : "0"}</td>
                     </tr>
