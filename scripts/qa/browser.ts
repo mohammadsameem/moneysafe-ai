@@ -95,16 +95,54 @@ interface Viewport {
   height: number;
 }
 
+/** One network request the page made, as the browser saw it. */
+interface NetRequest {
+  id: string;
+  method: string;
+  /** Path and query only (no origin), for readable logs. */
+  url: string;
+  startedAt: number;
+  status?: number;
+  durationMs?: number;
+  /** Set when the request never completed (network error, aborted, CORS...). */
+  failed?: string;
+}
+
+/** What to do with an intercepted request. */
+type Decision = "continue" | { fail: string } | { status: number; body: string } | { delayMs: number };
+
 class Page {
   consoleErrors: string[] = [];
+  /** Every request since the last clearNet(), in order. */
+  net: NetRequest[] = [];
+  private byId = new Map<string, NetRequest>();
   private inflight = 0;
   private viewport: Viewport = { name: "desktop", width: 1280, height: 800 };
 
   constructor(private cdp: Cdp) {
     cdp.onEvent((method, params) => {
-      if (method === "Network.requestWillBeSent") this.inflight++;
-      else if (method === "Network.loadingFinished" || method === "Network.loadingFailed") this.inflight = Math.max(0, this.inflight - 1);
-      else if (method === "Runtime.exceptionThrown") {
+      if (method === "Network.requestWillBeSent") {
+        this.inflight++;
+        const req = (params.request ?? {}) as { url?: string; method?: string };
+        const url = new URL(req.url ?? "http://x/", BASE);
+        const entry: NetRequest = { id: String(params.requestId), method: req.method ?? "GET", url: `${url.pathname}${url.search}`, startedAt: Date.now() };
+        this.byId.set(entry.id, entry);
+        this.net.push(entry);
+      } else if (method === "Network.responseReceived") {
+        const entry = this.byId.get(String(params.requestId));
+        if (entry) entry.status = Number(((params.response ?? {}) as { status?: number }).status);
+      } else if (method === "Network.loadingFinished") {
+        this.inflight = Math.max(0, this.inflight - 1);
+        const entry = this.byId.get(String(params.requestId));
+        if (entry) entry.durationMs = Date.now() - entry.startedAt;
+      } else if (method === "Network.loadingFailed") {
+        this.inflight = Math.max(0, this.inflight - 1);
+        const entry = this.byId.get(String(params.requestId));
+        if (entry) {
+          entry.durationMs = Date.now() - entry.startedAt;
+          entry.failed = `${String(params.errorText ?? "failed")}${params.canceled ? " (cancelled)" : ""}`;
+        }
+      } else if (method === "Runtime.exceptionThrown") {
         const d = (params.exceptionDetails ?? {}) as { text?: string; exception?: { description?: string } };
         this.consoleErrors.push(`exception: ${(d.exception?.description ?? d.text ?? "").split("\n")[0]}`);
       } else if (method === "Runtime.consoleAPICalled" && params.type === "error") {
@@ -190,6 +228,61 @@ class Page {
     if (ok) await this.cdp.send("Input.insertText", { text });
     return ok;
   }
+
+  clearNet(): void {
+    this.net = [];
+    this.byId.clear();
+  }
+
+  // ---- fault injection: answer matching requests ourselves (or fail / delay them) ----------------------------
+  private decide: ((url: string, n: number) => Decision) | null = null;
+  private paused = 0;
+
+  /** Intercept requests whose URL matches `pattern`; `decide` is called for each, with a running count. */
+  async intercept(pattern: string, decide: (url: string, n: number) => Decision): Promise<void> {
+    this.decide = decide;
+    this.paused = 0;
+    if (!this.interceptListening) {
+      this.interceptListening = true;
+      this.cdp.onEvent((method, params) => {
+        if (method !== "Fetch.requestPaused" || !this.decide) return;
+        const requestId = String(params.requestId);
+        const url = String(((params.request ?? {}) as { url?: string }).url ?? "");
+        const d: Decision = this.decide(url, ++this.paused);
+        void (async () => {
+          try {
+            if (typeof d === "object" && "fail" in d) await this.cdp.send("Fetch.failRequest", { requestId, errorReason: d.fail });
+            else if (typeof d === "object" && "status" in d) await this.cdp.send("Fetch.fulfillRequest", { requestId, responseCode: d.status, responseHeaders: [{ name: "content-type", value: "application/json" }], body: Buffer.from(d.body).toString("base64") });
+            else {
+              if (typeof d === "object" && "delayMs" in d) await sleep(d.delayMs);
+              await this.cdp.send("Fetch.continueRequest", { requestId });
+            }
+          } catch {
+            /* the page navigated away while the request was held */
+          }
+        })();
+      });
+    }
+    await this.cdp.send("Fetch.enable", { patterns: [{ urlPattern: pattern, requestStage: "Request" }] });
+  }
+
+  async stopIntercepting(): Promise<void> {
+    this.decide = null;
+    await this.cdp.send("Fetch.disable");
+  }
+  private interceptListening = false;
+
+  /** Pretend the tab is hidden / visible (the page's own code reads document.visibilityState and listens for visibilitychange). */
+  setTabVisible(visible: boolean): Promise<void> {
+    return this.eval<void>(`(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => ${visible ? "'visible'" : "'hidden'"} }); Object.defineProperty(document, 'hidden', { configurable: true, get: () => ${visible ? "false" : "true"} }); document.dispatchEvent(new Event('visibilitychange')); })()`);
+  }
+
+  /** The feed's status line (the small text next to its title) and its state attribute, if the new feed has one. */
+  feedLine = (): Promise<{ text: string; state: string | null }> =>
+    this.eval<{ text: string; state: string | null }>(`(() => { const p = Array.from(document.querySelectorAll('section p')).find((e) => /Updates every 5 seconds|Could not refresh|Refresh delayed|Live updates|session has ended|Retrying/.test(e.textContent || '')); return p ? { text: (p.textContent || '').trim(), state: p.getAttribute('data-feed-state') } : { text: '(no feed status line)', state: null }; })()`);
+
+  /** Requests to the activity endpoint since the last clearNet(). */
+  activityPolls = (): NetRequest[] => this.net.filter((r) => r.url.startsWith("/api/activity"));
 
   pathname = (): Promise<string> => this.eval<string>("location.pathname");
   text = (): Promise<string> => this.eval<string>("document.body.innerText");
@@ -367,6 +460,123 @@ async function main(): Promise<void> {
     sid = await page.eval<string>("fetch('/api/auth/session').then((r) => r.json()).then((s) => s.sid || '')");
     check("  ...with a session of its own", sid.length > 10);
 
+    // Fault mode: QA_FAULT=401|slow|once500|network on QA_WATCH_PATH (default /) watches how the activity feed copes.
+    if (process.env.QA_FAULT) {
+      const kind = process.env.QA_FAULT;
+      const seconds = Number(process.env.QA_WATCH_SECONDS ?? 25);
+      const timeout = seconds * 1000 + 30_000; // give extra time for cleanup
+      await page.setViewport(DESKTOP);
+      await page.goto(process.env.QA_WATCH_PATH ?? "/");
+      page.clearNet();
+      const t0 = Date.now();
+      await page.intercept("*/api/activity*", (_url, n) => {
+        if (kind === "401") return { status: 401, body: '{"error":"unauthorized"}' };
+        if (kind === "slow") return { delayMs: 12_000 };
+        if (kind === "once500") return n === 1 ? { status: 500, body: '{"error":"boom"}' } : "continue";
+        if (kind === "network") return n === 1 ? { fail: "ConnectionRefused" } : "continue";
+        return "continue";
+      });
+      let last = "";
+      const faultTimeout = setTimeout(() => { throw new Error(`fault mode timed out after ${timeout} ms`); }, timeout);
+      while (Date.now() - t0 < seconds * 1000) {
+        try {
+          const line = await Promise.race([page.feedLine(), sleep(2000).then(() => ({ text: "(feedLine timed out)", state: null }))]);
+          const key = `${line.state ?? "-"} | ${line.text}`;
+          if (key !== last) {
+            console.log(`  +${((Date.now() - t0) / 1000).toFixed(1)}s  status line: "${line.text}"${line.state ? `  [state=${line.state}]` : ""}`);
+            last = key;
+          }
+        } catch (e) {
+          console.log(`  +${((Date.now() - t0) / 1000).toFixed(1)}s  feedLine error: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        await sleep(250);
+      }
+      clearTimeout(faultTimeout);
+      await sleep(kind === "slow" ? 12_500 : 500); // let held requests finish so their timing is recorded
+      const polls = page.activityPolls();
+      let maxOverlap = 0;
+      for (const a of polls) maxOverlap = Math.max(maxOverlap, polls.filter((b) => b.startedAt <= a.startedAt && a.startedAt < b.startedAt + (b.durationMs ?? 60_000)).length);
+      console.log(`  ${polls.length} activity requests started in ${seconds}s; at most ${maxOverlap} in flight at once`);
+      await page.stopIntercepting();
+      return;
+    }
+
+    // Tab visibility test: QA_TAB_HIDE=/ QA_TAB_HIDE_SECONDS=n hides the tab for n seconds and reports poll activity.
+    if (process.env.QA_TAB_HIDE) {
+      const hideForSeconds = Number(process.env.QA_TAB_HIDE_SECONDS ?? 8);
+      await page.setViewport(DESKTOP);
+      await page.goto(process.env.QA_TAB_HIDE);
+      page.clearNet();
+      const t0 = Date.now();
+      console.log(`  tab visible for 5s, then hidden for ${hideForSeconds}s, then visible for 7s`);
+      await sleep(5_000);
+      const beforeHide = page.activityPolls().length;
+      console.log(`  +5s: ${beforeHide} polls so far; hiding tab now`);
+      await page.setTabVisible(false);
+      await sleep(hideForSeconds * 1000);
+      const duringHide = page.activityPolls().length - beforeHide;
+      console.log(`  +${5 + hideForSeconds}s: ${duringHide} polls while hidden; showing tab now`);
+      await page.setTabVisible(true);
+      await sleep(7_000);
+      const afterShow = page.activityPolls().length - beforeHide - duringHide;
+      console.log(`  +${5 + hideForSeconds + 7}s: ${afterShow} polls after tab became visible again`);
+      const all = page.activityPolls();
+      console.log(`  total: ${all.length} polls; while hidden: ${duringHide} (should be 0); after resume: ${afterShow} (should be at least 1, ideally 2+)`);
+      return;
+    }
+
+    // Stress mode: QA_STRESS=1 hammers /api/activity from inside the signed-in page and reports every non-200 and the latency tail.
+    if (process.env.QA_STRESS) {
+      await page.setViewport(DESKTOP);
+      await page.goto("/");
+      const report = await page.eval<{ total: number; statuses: Record<string, number>; maxMs: number; p95Ms: number; errors: string[] }>(`(async () => {
+        const statuses = {}; const times = []; const errors = [];
+        const one = async () => {
+          const t = performance.now();
+          try { const r = await fetch('/api/activity?page=1&pageSize=5', { cache: 'no-store' }); const b = await r.json().catch(() => null); const k = r.ok && b && Array.isArray(b.entries) ? String(r.status) : r.status + ' (bad body)'; statuses[k] = (statuses[k] || 0) + 1; }
+          catch (e) { statuses['network error'] = (statuses['network error'] || 0) + 1; errors.push(String(e)); }
+          times.push(performance.now() - t);
+        };
+        for (let i = 0; i < 150; i++) { await one(); await new Promise((r) => setTimeout(r, 100)); }          // steady polling, 10 per second
+        for (let burst = 0; burst < 6; burst++) { await Promise.all(Array.from({ length: 20 }, one)); await new Promise((r) => setTimeout(r, 300)); } // 20 at once
+        times.sort((a, b) => a - b);
+        return { total: times.length, statuses, maxMs: Math.round(times[times.length - 1]), p95Ms: Math.round(times[Math.floor(times.length * 0.95)]), errors: errors.slice(0, 3) };
+      })()`);
+      console.log(`stress: ${report.total} requests; statuses ${JSON.stringify(report.statuses)}; p95 ${report.p95Ms} ms; max ${report.maxMs} ms${report.errors.length ? `; errors ${report.errors.join(" | ")}` : ""}`);
+      return;
+    }
+
+    // Watch mode: QA_WATCH=/ QA_WATCH_SECONDS=15 loads a page and prints every activity poll (status, timing) and the feed's text.
+    if (process.env.QA_WATCH) {
+      const seconds = Number(process.env.QA_WATCH_SECONDS ?? 15);
+      await page.setViewport(DESKTOP);
+      page.clearNet();
+      await page.goto(process.env.QA_WATCH);
+      const t0 = Date.now();
+      let worst = "";
+      let churned = false;
+      while (Date.now() - t0 < seconds * 1000) {
+        await sleep(500);
+        // QA_WATCH_CHURN=1: after 3 s, ask the dev server for pages it has not compiled yet, all at once.
+        if (process.env.QA_WATCH_CHURN && !churned && Date.now() - t0 > 3000) {
+          churned = true;
+          const routes = ["/insights", "/activity", "/disputes", "/orders", `/orders/${seedId("order", "SEED-B")}`, `/disputes/${seedId("dispute", "SEED-C")}`, `/disputes/${seedId("dispute", "SEED-D")}`];
+          void page.eval<void>(`Promise.all(${JSON.stringify(routes)}.map((r) => fetch(r).then((x) => x.status).catch(() => 'failed')))`);
+          console.log(`(+3s: asked for ${routes.length} uncompiled pages at once)`);
+        }
+        const msg = await page.eval<string>(`(() => { const p = Array.from(document.querySelectorAll('section p')).find((e) => /Updates every 5 seconds|Could not refresh/.test(e.textContent || '')); return p ? p.textContent.trim() : '(no feed status line)'; })()`);
+        if (/Could not refresh/.test(msg)) worst = msg;
+      }
+      const last = await page.eval<string>(`(() => { const p = Array.from(document.querySelectorAll('section p')).find((e) => /Updates every 5 seconds|Could not refresh/.test(e.textContent || '')); return p ? p.textContent.trim() : '(no feed status line)'; })()`);
+      console.log(`feed status line at the end: "${last}"${worst ? `   (it showed "${worst}" during the run)` : ""}`);
+      console.log(`activity polls in ${seconds}s after load: ${page.activityPolls().length}`);
+      for (const r of page.activityPolls()) console.log(`  +${((r.startedAt - t0) / 1000).toFixed(1)}s  ${r.method} ${r.url}  ->  ${r.failed ? `FAILED ${r.failed}` : r.status ?? "no response"}  ${r.durationMs ?? "?"} ms`);
+      const bad = page.net.filter((r) => r.failed || (r.status !== undefined && r.status >= 400));
+      console.log(`other failing requests: ${bad.filter((r) => !r.url.startsWith("/api/activity")).map((r) => `${r.url} -> ${r.failed ?? r.status}`).join(" | ") || "none"}`);
+      console.log(`console errors: ${page.consoleErrors.length ? page.consoleErrors.slice(0, 5).join(" | ") : "none"}`);
+      return;
+    }
+
     // Diagnostic mode: QA_DIAG=/orders QA_DIAG_WIDTH=768 prints what sticks out on one page, then stops.
     if (process.env.QA_DIAG) {
       const width = Number(process.env.QA_DIAG_WIDTH ?? 768);
@@ -506,6 +716,45 @@ async function main(): Promise<void> {
     await page.setViewport(MOBILE);
     await page.goto("/disputes/00000000-0000-4000-8000-000000000000");
     check("  ...and on a phone it fits and keeps the tab bar", (await page.eval<Audit>(AUDIT)).overflowPx <= 0 && (await page.eval<Audit>(AUDIT)).bottomNav);
+
+    // ---- 9. Activity feed polling (robust, no persistent errors, tab visibility) -------------------------------------
+    await page.setViewport(DESKTOP);
+    const feedPages: Array<[string, string]> = [["/activity", "Agent Activity"], [`/disputes/${C}`, "Dispute detail"]];
+    for (const [path, label] of feedPages) {
+      page.clearNet();
+      await page.goto(path);
+      await sleep(8_000); // 8s is enough for ~2 polls at 5s intervals
+      const polls = page.activityPolls();
+      const bad = polls.filter((r) => r.status === undefined || r.status < 200 || r.status >= 300 || r.failed);
+      const line = await page.feedLine();
+      check(`${label}: after 8s, no "Could not refresh" and all polls 2xx`, !line.text.includes("Could not refresh") && bad.length === 0, bad.length ? `${bad.length} bad: ${bad.map((r) => `${r.url} -> ${r.failed ?? r.status}`).slice(0, 2).join(", ")}` : "");
+    }
+
+    // Tab visibility: hide for 8s, verify polls stop, then resume
+    await page.goto("/");
+    page.clearNet();
+    await sleep(3_000);
+    const beforeHide = page.activityPolls().length;
+    await page.setTabVisible(false);
+    await sleep(8_000);
+    const duringHide = page.activityPolls().length - beforeHide;
+    await page.setTabVisible(true);
+    await sleep(6_000);
+    const afterShow = page.activityPolls().length - beforeHide - duringHide;
+    check("tab hidden for 8s: no polls while hidden, at least 1 after resume", duringHide === 0 && afterShow >= 1, `hidden=${duringHide}, after=${afterShow}`);
+
+    // Single failed poll: verify quiet retry state clears on next success
+    await page.goto("/");
+    page.clearNet();
+    await page.intercept("*/api/activity*", (_url, n) => (n === 1 ? { status: 500, body: '{"error":"boom"}' } : "continue"));
+    await sleep(3_000);
+    const retry = await page.feedLine();
+    check("single failed poll: shows quiet retry state", retry.state === "retrying" && retry.text.includes("Refresh delayed"));
+    await sleep(6_000);
+    const cleared = await page.feedLine();
+    await page.stopIntercepting();
+    check("  ...which clears on the next success", cleared.state === "ok" && cleared.text.includes("Updates every 5 seconds"));
+
     info(`screenshots written to ${OUT}`);
   } catch (err) {
     noteFailure(`unexpected error: ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}`);

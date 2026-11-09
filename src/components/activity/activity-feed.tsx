@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DemoBadge, SimulatedBadge } from "@/components/badges";
 import type { ActivityEntry, ActivityPage } from "@/lib/activity/queries";
+import { usePoll } from "@/lib/activity/polling";
 
 const STEP: Record<ActivityEntry["stepType"], { icon: string; label: string }> = {
   paypal_api: { icon: "P", label: "PayPal" },
@@ -37,15 +38,21 @@ interface Props {
 /**
  * Agent activity, newest first, refreshed every 5 seconds (REQ-AA-02). Each row shows the step
  * type, tool, time, duration and status, and expands to its input and output summaries.
+ *
+ * Polling behaviour:
+ * - Uses the server `initial` data immediately (no mount fetch)
+ * - Polls every 5s when the tab is visible, pauses when hidden, resumes immediately when visible
+ * - On first poll failure: shows "Refresh delayed, retrying" (quiet transient state)
+ * - On 3rd consecutive failure: shows "Could not refresh data" (persistent error)
+ * - On 401: shows "Your session has ended; sign in again" and stops polling
+ * - Keeps the last good data visible during transient errors
  */
 export function ActivityFeed({ initial, refOrderId, refDisputeId, full = false, pollMs = 5000, title = "Agent activity" }: Props) {
-  const [entries, setEntries] = useState<ActivityEntry[]>(initial.entries);
   const [older, setOlder] = useState<ActivityEntry[]>([]);
   const [hasMore, setHasMore] = useState(initial.hasMore);
   const [page, setPage] = useState(1);
   const [stepType, setStepType] = useState<string>("");
   const [status, setStatus] = useState<string>("");
-  const [error, setError] = useState(false);
 
   const query = useCallback(
     (p: number) => {
@@ -59,35 +66,24 @@ export function ActivityFeed({ initial, refOrderId, refDisputeId, full = false, 
     [initial.pageSize, refOrderId, refDisputeId, stepType, status],
   );
 
-  const refresh = useCallback(async () => {
-    try {
-      const response = await fetch(query(1), { cache: "no-store" });
-      if (!response.ok) throw new Error(String(response.status));
-      const body = (await response.json()) as ActivityPage;
-      setEntries(body.entries);
-      if (page === 1) setHasMore(body.hasMore);
-      setError(false);
-    } catch {
-      setError(true);
-    }
-  }, [query, page]);
+  const fetchFn = useCallback(async (): Promise<ActivityPage> => {
+    const response = await fetch(query(1), { cache: "no-store" });
+    if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
+    return (await response.json()) as ActivityPage;
+  }, [query]);
 
-  // Filters changed: start again from page 1.
+  // Use the robust polling hook; don't poll on mount (we already have `initial` data from the server)
+  const pollState = usePoll<ActivityPage>({ fetchFn, intervalMs: pollMs, skipInitialPoll: true });
+
+  // On first render, show the server initial data; after that, show the polled data (or keep initial if polling hasn't succeeded yet)
+  const entries = pollState.data?.entries ?? initial.entries;
+
+  // Filters changed: reset page and older entries, and let the poller refresh (it will detect the new query)
   useEffect(() => {
     setOlder([]);
     setPage(1);
-    void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // The polling effect will restart with the new fetchFn
   }, [stepType, status]);
-
-  // Poll every 5 s while the tab is visible.
-  useEffect(() => {
-    const tick = () => {
-      if (document.visibilityState === "visible") void refresh();
-    };
-    const timer = setInterval(tick, pollMs);
-    return () => clearInterval(timer);
-  }, [refresh, pollMs]);
 
   async function loadMore() {
     const next = page + 1;
@@ -102,11 +98,19 @@ export function ActivityFeed({ initial, refOrderId, refDisputeId, full = false, 
   const seen = new Set(entries.map((e) => e.id));
   const rows = [...entries, ...older.filter((e) => !seen.has(e.id))];
 
+  // Status line text and state attribute for QA checks
+  const feedStatus = useMemo(() => {
+    if (pollState.sessionEnded) return { text: "Your session has ended; sign in again", state: "session-ended" };
+    if (pollState.error) return { text: "Could not refresh data", state: "error" };
+    if (pollState.retrying) return { text: "Refresh delayed, retrying", state: "retrying" };
+    return { text: "Updates every 5 seconds", state: "ok" };
+  }, [pollState]);
+
   return (
     <section aria-labelledby={`activity-${refOrderId ?? refDisputeId ?? "all"}`} className="rounded-xl border bg-card p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 id={`activity-${refOrderId ?? refDisputeId ?? "all"}`} className="font-medium">{title}</h2>
-        <p className="text-xs text-muted-foreground" aria-live="polite">{error ? "Could not refresh; retrying…" : "Updates every 5 seconds"}</p>
+        <p className="text-xs text-muted-foreground" aria-live="polite" data-feed-state={feedStatus.state}>{feedStatus.text}</p>
       </div>
 
       {full ? (

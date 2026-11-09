@@ -7,9 +7,10 @@ import type { DashboardMetrics } from "@/lib/dashboard/metrics";
 export function RiskDonut({ distribution }: { distribution: DashboardMetrics["verdict_distribution"] }) {
   const counts = { ship: distribution.ship, verify: distribution.verify, hold: distribution.hold };
   const segments = donutSegments(counts);
+  const holdCount = distribution.hold;
 
   return (
-    <section aria-labelledby="risk-heading" className="rounded-xl border bg-card p-5">
+    <section aria-labelledby="risk-heading" className="self-start rounded-xl border bg-card p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 id="risk-heading" className="font-medium">Risk distribution</h2>
         {distribution.includesDemoData ? <DemoBadge /> : null}
@@ -54,6 +55,11 @@ export function RiskDonut({ distribution }: { distribution: DashboardMetrics["ve
         </div>
       )}
       <ScoringLabel className="mt-4" />
+      {holdCount > 0 ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {holdCount} {holdCount === 1 ? "order" : "orders"} on Hold {holdCount === 1 ? "needs" : "need"} attention
+        </p>
+      ) : null}
     </section>
   );
 }
