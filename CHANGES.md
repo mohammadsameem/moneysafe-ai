@@ -2,6 +2,19 @@
 
 Notable changes to the spec and architecture, newest first. Task-by-task progress lives in `tasks.md`; this file records decisions that changed direction.
 
+
+## Deviation log
+One line per deviation from the written specs, newest first.
+
+- 2026-11-08 REQ-NFR-18 / M1-09b: `GET /api/orders/paypal-return` and `/paypal-cancel` redirect (302) to `/login` when there is no session, instead of 401 JSON; every other `/api/*` route is unchanged. Reason: they are browser navigations from PayPal.
+- 2026-11-08 REQ-AUTH-02 / M1-11: the login page prints the demo email and the value of `DEMO_PASSWORD` in a "Demo login" box (public by design). Anyone who can open `/login` can read it, so the demo account must hold sample data only.
+- 2026-11-08 REQ-ORD-01 / M1-07b: a created (unpaid) order stores `buyer_email = pending@paypal.invalid` because the column is NOT NULL and PayPal reveals the payer's email only at capture.
+- 2026-11-08 design 7.1 / M1-07b: orders are bound to the session that created them (`orders.session_id`); a new sign-in gets a new session id, so an unpaid order from an expired session cannot be captured after signing in again.
+- 2026-11-08 M1-07b: when PayPal is not used (Demo Mode, no credentials, or a PayPal error), order creation makes an `is_demo` order that is already `captured` and scored (buyer `demo.buyer@example.com`, first-time fixed true).
+- 2026-11-08 design 5.4 / M1-09: the explanation and verification schemas also enforce the word limits (120 and 200 words) and a single-line subject, not only the character limits.
+- 2026-11-08 M1-09: the buyer's email address is never sent to the model; the prompt builders accept only the fields they use.
+- 2026-11-08 M1-01 / next.config.mjs: `postgres` is listed in `experimental.serverComponentsExternalPackages`; bundling it broke `next build` (an `import.meta.url` asset that Terser could not parse).
+
 ---
 
 ## 2026-11-08: Provider-agnostic LLM layer (free-tier friendly)
