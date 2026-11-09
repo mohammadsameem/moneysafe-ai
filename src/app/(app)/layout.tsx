@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import { SidebarNav } from "@/components/sidebar-nav";
+import { ToastProvider } from "@/components/toast/toast-provider";
 import { authOptions } from "@/lib/auth";
 
 /**
@@ -12,6 +13,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!session?.sid) redirect("/login");
 
   return (
+    <ToastProvider>
     <div className="min-h-screen md:flex">
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-10 focus:rounded focus:bg-background focus:px-3 focus:py-2 focus:ring-2 focus:ring-ring">
         Skip to content
@@ -27,5 +29,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         {children}
       </main>
     </div>
+    </ToastProvider>
   );
 }

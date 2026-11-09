@@ -738,7 +738,7 @@ Added at checkpoint E. Built right after M3-06.
 
 ### M4-04 · Dashboard metrics
 
-- [ ] `GET /api/dashboard`:
+- [x] `GET /api/dashboard`:
   - `value_under_review`: SUM(amount_usd) WHERE verdict='hold'
   - `disputes_won`: count + SUM(disputed_amount_usd) WHERE outcome='won'
   - `chargeback_fees_avoided`: count WHERE outcome='refunded' × `CHARGEBACK_FEE_USD`
@@ -746,11 +746,22 @@ Added at checkpoint E. Built right after M3-06.
   - `dollars_protected_simulated`: SUM(disputed_amount_usd) WHERE outcome='won' AND outcome_is_simulated=true
   - `recent_activity`: last 5 `agent_activity` rows
   - `verdict_distribution`: count by verdict
-- [ ] Dashboard page (`/`):
+- [x] Dashboard page (`/`):
   - 4 metric cards; "Dollars protected" card shows sub-label "$X from simulated outcomes" when `dollars_protected_simulated > 0`
   - Risk distribution donut chart
   - Recent activity feed
   - "Reset demo" button (confirmation dialog: "This resets data for all judges") + success toast
+
+
+> M4-04 notes (18 new tests; 813 in total):
+>
+> - **`GET /api/dashboard`** (`src/lib/dashboard/{metrics,load}.ts`): the spec's keys (`value_under_review`, `disputes_won`, `chargeback_fees_avoided`, `dollars_protected`, `dollars_protected_simulated`, `recent_activity`, `verdict_distribution`). The numbers are computed by one pure function (`computeDashboardMetrics`) from two small queries over what THIS session may see: its own rows plus the seeded history (the same visibility rule as orders and disputes). Value under review = sum of Hold orders; Disputes won = count and disputed amounts of won disputes; Chargeback fees avoided = accepted refunds x `CHARGEBACK_FEE_USD` (the fee only); Dollars protected = disputed amounts of won disputes only, with `dollars_protected_simulated` the part from simulated outcomes. Fees never enter Dollars protected (tested). It never calls a model.
+> - **Dashboard page** (`/`, moved into the `(dashboard)` route group so its `loading.tsx` skeleton cannot wrap a detail page): caption "Figures cover your own activity in this session plus the shared demo history"; the Judge guide card; four metric cards (each with a Demo data badge when seeded rows contribute, and "$X from simulated outcomes" under Dollars protected when that part is above zero); the risk-distribution donut (SVG, with a text alternative and the counts and percentages in a legend, plus the scoring label); the 5 most recent agent activity entries (the same polling feed) with a link to all activity; and the Reset demo button.
+> - **Judge guide:** five short steps (see Orders, Start demo, open the SEED-C copy and approve, Simulate outcome, see Insights and the Dashboard update) with links and a Start demo button.
+> - **Reset demo button** (`reset-demo-button.tsx`): a native `<dialog>` that says "This resets data for all judges" and lists what is deleted and restored, then POSTs `/api/demo/reset` and shows a toast. **The route itself is M4-05**, so until then the button reports "The demo could not be reset" in an error toast and changes nothing.
+> - **Toaster** (`src/components/toast/toast-provider.tsx`, rules in `src/lib/toast.ts`): built here because the reset needs a success toast; it wraps the whole app layout. Errors use `role="alert"` and stay 8 s, others 5 s, at most four are shown, each can be dismissed, and they sit above the mobile nav. M4-06 uses it for approvals, write errors and analysis.
+> - **Verified live** (dev server, real Supabase, 21/21): the API without a session is 401; in the seeded state Value under review is $320 (SEED-F, one order), Disputes won = the two seeded wins and Dollars protected their amounts ($223) with no simulated part, Chargeback fees avoided = 2 x $20, the distribution matches the seeded orders by verdict, 5 seeded activity entries; the page renders the four cards, the caption, the donut with its `aria-label`, the activity feed, the Judge guide, the Reset button and its confirm text, 15 Demo data badges and no "trained fraud model" wording; after Simulate outcome Won on my SEED-C copy and a refund on my SEED-D copy, Disputes won went +1, Dollars protected +$145 (all of it simulated), Chargeback fees avoided +1 refund, and the page showed "$145.00 from simulated outcomes"; another session's dashboard did not change.
+> - **Not verified:** the Reset dialog and its toast in a real browser; the layout at 375 px and 1280 px (M4-07); the Reset route (M4-05).
 
 ---
 
