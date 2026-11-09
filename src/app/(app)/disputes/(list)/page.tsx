@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { DemoBadge } from "@/components/badges";
 import { DeadlineCountdown } from "@/components/deadline-countdown";
+import { StartDemoButton } from "@/components/demo/start-demo-button";
 import { ToneBadge } from "@/components/tone-badge";
 import { formatDate, shortId } from "@/lib/format";
 import { listDisputeViews, type DisputeTab, type DisputeView } from "@/lib/disputes/read";
@@ -30,6 +31,10 @@ export default async function DisputesPage({ searchParams }: { searchParams: { t
           <p className="text-sm text-muted-foreground">
             {tab === "open" ? "Soonest deadline first. Open a dispute to see the recommendation and approve an action." : "Most recently resolved first."}
           </p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <StartDemoButton />
+          <p className="text-xs text-muted-foreground">Your own copies of the example disputes</p>
         </div>
       </div>
 
@@ -94,7 +99,10 @@ function OpenTable({ disputes, renderedAt }: { disputes: DisputeView[]; rendered
                 <Link href={`/disputes/${d.id}`} className="font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   {REASON_LABEL[d.reason]}
                 </Link>
-                <div className="mt-1 flex flex-wrap gap-1.5">{d.isDemo ? <DemoBadge /> : null}</div>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {d.isDemo ? <DemoBadge /> : null}
+                  {d.isSharedExample ? <ToneBadge tone="neutral">Shared example</ToneBadge> : null}
+                </div>
               </td>
               <td className={`${td} text-right tabular-nums`}>{money(d.amountUsd)}</td>
               <td className={td}>

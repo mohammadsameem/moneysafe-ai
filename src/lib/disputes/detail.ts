@@ -11,6 +11,7 @@ import { isAnalysed } from "./analysis-state";
 import { resolveApprovalState, type ApprovalState } from "./approval";
 import { expectedAction } from "./approve";
 import { getDisputeView, isResolvedStatus, type DisputeReadDeps, type DisputeView } from "./read";
+import { demoCopyId } from "@/lib/demo/ids";
 import { canSimulateOutcome } from "./simulate";
 import type { DisputeActionType, DisputesRepo } from "./types";
 
@@ -24,7 +25,9 @@ export type PanelState =
   /** The action ran (or was simulated). */
   | { mode: "done"; action: DisputeActionType; executedAt: string; simulated: boolean; edited: boolean }
   /** Resolved with no action taken here (the seeded history). */
-  | { mode: "resolved" };
+  | { mode: "resolved" }
+  /** An open shared seed (M3-08): read-only; "Start demo" opens this session's copy, `copyId`. */
+  | { mode: "shared_example"; copyId: string };
 
 export interface EvidenceSummary {
   count: number;
@@ -105,7 +108,10 @@ export async function loadDisputeDetail(id: string, sessionId: string, deps: Det
     view,
     order: { id: order.id, riskScore: order.riskScore, verdict: order.verdict },
     evidence: { count: artefacts.length, latestAt },
-    panel: derivePanelState(view, dispute.analysisComputedAt, state, history.approvals),
+    panel:
+      dispute.isSeed && !isResolvedStatus(dispute.status)
+        ? { mode: "shared_example", copyId: demoCopyId(sessionId, dispute.id) }
+        : derivePanelState(view, dispute.analysisComputedAt, state, history.approvals),
     history,
     willSimulate: shouldSimulateWrite(dispute, deps.demoMode),
     canSimulateOutcome: canSimulateOutcome(

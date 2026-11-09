@@ -174,9 +174,9 @@ describe("approve: concurrency", () => {
   });
 });
 
-describe("approve: simulation on seeded and demo disputes", () => {
-  it("a seeded contest: approval stored, nothing sent to PayPal, executed as simulated, dispute becomes 'action_taken'", async () => {
-    const { repo, paypal, deps } = setup(contestDispute({ isSeed: true, paypalDisputeId: null, sessionId: null }));
+describe("approve: simulation on demo disputes (a session's Start demo copy)", () => {
+  it("a demo contest: approval stored, nothing sent to PayPal, executed as simulated, dispute becomes 'action_taken'", async () => {
+    const { repo, paypal, deps } = setup(contestDispute({ isDemo: true, paypalDisputeId: null, sessionId: SESSION }));
     const result = await approve(deps);
     expect(result).toMatchObject({ kind: "executed", simulated: true, execution: { isSimulated: true }, view: { status: "action_taken" } });
     expect(paypal!.request).not.toHaveBeenCalled();
@@ -184,11 +184,25 @@ describe("approve: simulation on seeded and demo disputes", () => {
     expect(repo.outcomes).toHaveLength(0);
   });
 
-  it("a seeded refund: simulated, resolved as refunded with a simulated outcome", async () => {
-    const { repo, deps } = setup(refundDispute({ isSeed: true, paypalDisputeId: null, sessionId: null }));
+  it("a demo refund: simulated, resolved as refunded with a simulated outcome", async () => {
+    const { repo, deps } = setup(refundDispute({ isDemo: true, paypalDisputeId: null, sessionId: SESSION }));
     const result = await refund(deps);
     expect(result).toMatchObject({ kind: "executed", simulated: true, outcomeRecorded: true, view: { status: "resolved_refunded", outcome: "refunded", outcomeIsSimulated: true } });
     expect(repo.counter.value).toBe(1);
+  });
+
+  it("a shared seed cannot be approved or rejected directly (M3-08): nothing is stored or sent", async () => {
+    for (const dispute of [contestDispute({ isSeed: true, isDemo: true, paypalDisputeId: null, sessionId: null }), refundDispute({ isSeed: true, isDemo: true, paypalDisputeId: null, sessionId: null })]) {
+      const { repo, paypal, deps } = setup(dispute);
+      const action = dispute.finalRecommendation === "refund" ? "accept_claim" : "submit_evidence";
+      expect(await approve(deps, { action })).toEqual({ kind: "shared_example" });
+      expect(await rejectDispute({ disputeId: DISPUTE_ID, sessionId: SESSION, merchantUserId: "m", action }, deps)).toEqual({ kind: "shared_example" });
+      expect(repo.inserts).toEqual({ approvals: 0, executions: 0, rejections: 0 });
+      expect(repo.outcomes).toHaveLength(0);
+      expect(repo.counter.value).toBe(0);
+      expect(paypal!.request).not.toHaveBeenCalled();
+      expect(repo.records[0]?.dispute.status).toBe("open");
+    }
   });
 
   it("DEMO_MODE simulates a live-linked dispute too", async () => {

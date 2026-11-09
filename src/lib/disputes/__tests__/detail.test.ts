@@ -3,6 +3,7 @@ import { SEED_C, artefactRows } from "@/lib/evidence/__tests__/fixtures";
 import { approveDispute, rejectDispute } from "../approve";
 import { derivePanelState, loadDisputeDetail } from "../detail";
 import { toDisputeView } from "../read";
+import { demoCopyId } from "@/lib/demo/ids";
 import { DISPUTE_ID, NOW, ORDER_ID, OTHER_SESSION, SESSION, analysed, createFakeDisputesRepo, makeDispute, makeRecord } from "./fakes";
 import { PayPalError, type PayPalClient } from "@/lib/paypal";
 
@@ -41,6 +42,14 @@ describe("loadDisputeDetail", () => {
     expect((await load(setup({}, { demoMode: true }).deps))?.willSimulate).toBe(true);
   });
 
+  it("an open shared seed shows the 'shared_example' panel with this session's copy id (M3-08)", async () => {
+    const d = await load(setup({ isSeed: true, isDemo: true, sessionId: null }).deps);
+    expect(d?.panel).toEqual({ mode: "shared_example", copyId: demoCopyId(SESSION, DISPUTE_ID) });
+    expect(d?.canSimulateOutcome).toBe(false);
+    // A resolved seed (H1-H5) is still just 'resolved'.
+    expect((await load(setup({ isSeed: true, sessionId: null, status: "resolved_won", outcome: "won" }).deps))?.panel).toEqual({ mode: "resolved" });
+  });
+
   it("after a rejection the panel still offers the decision, with when it was rejected", async () => {
     const { repo, deps } = setup();
     await rejectDispute({ disputeId: DISPUTE_ID, sessionId: SESSION, merchantUserId: "m", action: "submit_evidence" }, { repo, now: () => NOW });
@@ -54,7 +63,7 @@ describe("loadDisputeDetail", () => {
   });
 
   it("after a simulated approval the panel is 'done' (Action already executed), marked simulated and edited", async () => {
-    const { repo, deps } = setup({ isSeed: true, sessionId: null });
+    const { repo, deps } = setup({ isDemo: true, sessionId: SESSION });
     expect((await approve(repo, null, "submit_evidence", "My own words.")).kind).toBe("executed");
     const d = await load(deps);
     expect(d?.panel).toEqual({ mode: "done", action: "submit_evidence", executedAt: NOW.toISOString(), simulated: true, edited: true });
@@ -64,7 +73,7 @@ describe("loadDisputeDetail", () => {
   });
 
   it("a simulated refund resolves the dispute but the panel still says the action was executed", async () => {
-    const { repo, deps } = setup({ isSeed: true, sessionId: null, finalRecommendation: "refund", systemRecommendation: "refund", draftResponse: null });
+    const { repo, deps } = setup({ isDemo: true, sessionId: SESSION, finalRecommendation: "refund", systemRecommendation: "refund", draftResponse: null });
     await approve(repo, null, "accept_claim");
     const d = await load(deps);
     expect(d?.view.status).toBe("resolved_refunded");

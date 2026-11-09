@@ -51,6 +51,8 @@ export type ApproveResult =
   /** The live call failed. Nothing was marked done; the next approve is a retry with the same request id. */
   | { kind: "execution_failed"; message: string; execution: PublicExecution; view: DisputeView }
   | { kind: "not_found" }
+  /** A shared seed: read-only for everyone; use Start demo for an own copy. */
+  | { kind: "shared_example" }
   | { kind: "not_analyzed" }
   | { kind: "wrong_action"; expected: DisputeActionType }
   | { kind: "not_open" }
@@ -84,6 +86,8 @@ export async function approveDispute(req: ApproveRequest, deps: ApproveDeps): Pr
   const record = await deps.repo.findVisible(req.disputeId, req.sessionId);
   if (!record) return { kind: "not_found" };
   const { dispute, order } = record;
+  // Seeds are shared by every session: approving one would change it for everyone (M3-08).
+  if (dispute.isSeed) return { kind: "shared_example" };
 
   const expected = expectedAction(dispute.finalRecommendation);
   if (!isAnalysed(dispute.analysisComputedAt) || expected === null) return { kind: "not_analyzed" };
@@ -197,6 +201,7 @@ function buildAction(req: ApproveRequest, dispute: Dispute, artefacts: readonly 
 export type RejectResult =
   | { kind: "rejected"; view: DisputeView }
   | { kind: "not_found" }
+  | { kind: "shared_example" }
   | { kind: "not_analyzed" }
   | { kind: "wrong_action"; expected: DisputeActionType }
   | { kind: "not_open" }
@@ -208,6 +213,7 @@ export async function rejectDispute(req: ActionRequest, deps: Pick<ApproveDeps, 
   const record = await deps.repo.findVisible(req.disputeId, req.sessionId);
   if (!record) return { kind: "not_found" };
   const { dispute, order } = record;
+  if (dispute.isSeed) return { kind: "shared_example" };
 
   const expected = expectedAction(dispute.finalRecommendation);
   if (!isAnalysed(dispute.analysisComputedAt) || expected === null) return { kind: "not_analyzed" };

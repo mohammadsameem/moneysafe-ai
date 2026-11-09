@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { SimulatedBadge } from "@/components/badges";
+import { StartDemoButton } from "@/components/demo/start-demo-button";
+import { SHARED_EXAMPLE_MESSAGE } from "@/lib/demo/messages";
 import type { PanelState } from "@/lib/disputes/detail";
 import { money } from "@/lib/disputes/present";
 
@@ -126,6 +128,16 @@ export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate, canSi
       {panel.mode === "no_analysis" ? <p className="text-sm text-muted-foreground">Available once the analysis is ready.</p> : null}
 
       {panel.mode === "resolved" ? <p className="text-sm text-muted-foreground">This dispute is resolved. There is nothing left to approve.</p> : null}
+
+      {panel.mode === "shared_example" ? (
+        <div className="space-y-3">
+          <div role="note" className="rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-950">
+            <p className="font-medium">{SHARED_EXAMPLE_MESSAGE}</p>
+            <p className="mt-1 text-xs">Every visitor sees this example, so it cannot be approved or rejected. Start demo gives you your own copy with the same evidence and analysis.</p>
+          </div>
+          <StartDemoButton seedDisputeId={disputeId} />
+        </div>
+      ) : null}
 
       {panel.mode === "done" ? (
         <div role="status" className="space-y-2 rounded-md border border-green-300 bg-green-50 px-3 py-3 text-sm text-green-950">

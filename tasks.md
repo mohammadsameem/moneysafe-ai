@@ -644,6 +644,28 @@ Only if M3-01 to M3-06 are done and time remains. Skip without affecting the dem
 
 ---
 
+### M3-08 · Start demo (per-session demo copies)
+
+Added at checkpoint E. Built right after M3-06.
+
+- [x] `POST /api/demo/start`: creates THIS session's copies of SEED-C, SEED-D, SEED-E (`is_demo = true`, `is_seed = false`, `session_id` = caller) on the same orders (same evidence), with the stored analysis (zero LLM calls) and deadlines at now + 72 / 48 / 40 h. Copies are visible only to the creating session. Idempotent per session: a second click creates nothing and returns the existing copies
+- [x] Shared seeds are read-only examples: approve / reject return 409 `shared_example`; the seed's decision panel shows "Shared example, use Start demo for your own copy" and a Start demo button instead of Approve / Reject
+- [x] "Start demo" button on the Dashboard placeholder and the Disputes page; the Open tab lists the session's copies instead of the seeds once it has them
+- [x] Reset demo (M4-05) deletes session copies too (added to M4-05)
+- [x] Tests: two sessions approving their own SEED-C copies do not affect each other; seeds cannot be approved directly; the second Start demo click creates nothing new
+
+
+> M3-08 notes (10 new tests; 701 in total; approach in CHANGES.md):
+>
+> - **`POST /api/demo/start`** (`src/lib/demo/copies.ts`, `startDemo`): reads SEED-C/D/E first (a missing seed creates nothing, 409 `seed_missing`), then inserts one copy each with id `uuidv5("demo-copy:<session>:<seed id>")` and `ON CONFLICT (id) DO NOTHING`. A copy (`buildDemoCopy`) is the seed row with `is_seed = false`, `is_demo = true`, `session_id` = caller, status open, no outcome, no PayPal id, the seed's order (same evidence) and stored analysis, `analysis_computed_at` = now, and `deadline_at` = now + the seed's offset (72 / 48 / 40 h). No model call. The second click returns `status: "existing"`, `created: 0` and the same ids. Logged once as `start_demo` (simulated).
+> - **Seeds are read-only:** `approveDispute` / `rejectDispute` return `shared_example` for any `is_seed` dispute (409 with "Shared example, use Start demo for your own copy"), before anything is stored. An open seed's page shows panel mode `shared_example`: the notice and a Start demo button (which then opens this session's copy of that seed) instead of Approve / Edit / Reject. Resolved seeds (H1-H5) are unchanged.
+> - **Inbox:** `listDisputeViews` drops a seed when the session has its copy (found by computing the copy id), so the Open tab shows your copies; seeds carry a "Shared example" badge (`DisputeView.isSharedExample`). Start demo buttons on the Dashboard placeholder and the Disputes page (`src/components/demo/start-demo-button.tsx`).
+> - **Tests changed:** the approve-branching and detail tests that approved seeds now approve a session-owned demo dispute; new tests: seeds cannot be approved or rejected; two sessions approving (and resolving) their own SEED-C copies do not affect each other; the second Start demo creates nothing; inbox dedupe; shared_example panel. M4-05 now has a "delete Start demo copies" item; M4-09 step 5 starts with Start demo.
+> - **Verified live** (dev server, `DEMO_MODE=true`, real Supabase, two sessions, 26/26): 401 without a session; Start demo created 3 rows as specified (same orders and win probabilities as the seeds, deadlines 72 / 48 / 40 h out, analysed); a second click created nothing; approving / rejecting a seed 409 `shared_example`; the seed page shows the notice and Start demo and no Approve / Reject; my inbox lists my copies, not the seeds; the other session cannot open my copy, gets its own copies, and approving my copy left its copy and the seed open (its own approval then executed, not "already executed"); Won on my copy left its copy `action_taken`; my SEED-D copy refunded with an outcome row and no Simulate outcome control; SEED-E copy 44% Moderate with gaps and a 1d 15h countdown; no `llm_call` rows for the session. Data removed afterwards; `db:seed:verify` passes.
+> - **Not verified:** the Start demo button clicked in a real browser (the redirect to the copy after clicking on a seed page); two simultaneous Start demo clicks against the real database (the `ON CONFLICT` path is unit-tested only).
+
+---
+
 ## Milestone 4 — Learning Loop, Dashboard, Polish, Deploy
 **Demo-able after:** Full end-to-end demo; all pages complete; live on Vercel + Supabase.
 
@@ -710,6 +732,7 @@ Only if M3-01 to M3-06 are done and time remains. Skip without affecting the dem
   3. Re-insert all seed records (upsert by seed ID): SEED-A/B/D-ORD/E-ORD/F orders, H1-ORD through H5-ORD, SEED-C/D/E open disputes (status=open, no approval/execution rows), H1–H5 resolved disputes with `dispute_outcomes` rows
   4. Re-insert pre-computed analysis for SEED-C/D/E (set `analysis_computed_at`)
   5. Restore the seeded `insights_cache` row (deterministic summary, matching fingerprint) so Insights makes no LLM call after a reset. Do **not** clear `llm_daily_usage` (the global cap must survive resets) or `llm_rate_limits`
+- [ ] **Delete every session's Start demo copies (M3-08)** and simulated disputes (M3-06): they are `is_seed = false` disputes on SEED orders, so step 1 must delete their `approval_records`, `action_executions`, `dispute_outcomes` and `agent_activity` rows by `dispute_id` (not by the order's `is_seed`) before the disputes themselves. Test: after a reset, Start demo in the same session creates the three copies again.
 - [ ] Wire button; success toast; full page refresh
 
 ---
@@ -761,7 +784,7 @@ The guard itself is built in M1-09b. This task verifies it end to end.
   2. Orders list: SEED-B amber/Verify first/55; SEED-F red/Hold/70
   3. SEED-B detail: AI explanation, verification draft, 3 active signals (country mismatch, first-time high value, rush shipping)
   4. SEED-F detail: 4 active signals; $320 > $255 threshold shown
-  5. Dispute inbox (Open tab): SEED-C, SEED-D, SEED-E visible; sorted by deadline
+  5. Dispute inbox (Open tab): SEED-C, SEED-D, SEED-E visible as "Shared example"; sorted by deadline. Click **Start demo** (M3-08): the Open tab now lists your own copies of the three; steps 7–11 use those copies (the seeds themselves cannot be approved)
   6. Dispute inbox (Resolved tab): H1–H5 visible with Won/Lost/Refunded outcome badges
   7. Open SEED-C dispute: win likelihood **95%** / Strong, Contest, "System recommendation"; full evidence vault, Delivered scan
   8. Approve SEED-C contest → "simulated" badge on execution

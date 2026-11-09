@@ -9,6 +9,7 @@
 import type { Dispute, Order } from "@/db/schema";
 import type { ActivityMeta } from "@/lib/activity/logger";
 import { getDispute, withDemoFallback, type PayPalClient } from "@/lib/paypal";
+import { demoCopyId } from "@/lib/demo/ids";
 import { isAnalysed } from "./analysis-state";
 import { computeDeadline } from "./deadline";
 import type { DisputeRecord, DisputesReadRepo } from "./types";
@@ -53,6 +54,8 @@ export interface DisputeView {
   deadlineAt: string;
   /** True for seeded and demo disputes (the "Demo data" badge). */
   isDemo: boolean;
+  /** True for a shared seed (read-only for every session; "Start demo" makes an own copy). */
+  isSharedExample: boolean;
   buyerMessage: string | null;
   createdAt: string;
   /** When a resolved dispute was resolved (null while open). */
@@ -94,6 +97,7 @@ export function toDisputeView(record: DisputeRecord, now: Date, deadlineOverride
     amountUsd: d.disputedAmountUsd,
     deadlineAt: deadlineOverride ?? computeDeadline(d, now),
     isDemo: d.isSeed || d.isDemo,
+    isSharedExample: d.isSeed,
     buyerMessage: d.buyerMessage,
     createdAt: d.createdAt,
     resolvedAt: isResolvedStatus(d.status) ? d.updatedAt : null,
@@ -150,7 +154,10 @@ export type DisputeTab = "open" | "resolved";
 /** Visible disputes for one tab. Open: soonest deadline first. Resolved: most recently resolved first. */
 export async function listDisputeViews(sessionId: string, tab: DisputeTab, deps: DisputeReadDeps): Promise<DisputeView[]> {
   const now = (deps.now ?? (() => new Date()))();
-  const records = await deps.repo.listVisible(sessionId);
+  const all = await deps.repo.listVisible(sessionId);
+  // A seed this session has its own Start demo copy of is not listed: the copy stands in for it.
+  const ids = new Set(all.map((r) => r.dispute.id));
+  const records = all.filter((r) => !(r.dispute.isSeed && ids.has(demoCopyId(sessionId, r.dispute.id))));
   const wanted = records.filter((r) => isResolvedStatus(r.dispute.status) === (tab === "resolved"));
 
   const views: DisputeView[] = [];

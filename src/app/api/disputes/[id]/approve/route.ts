@@ -3,6 +3,7 @@ import { z } from "zod";
 import { MERCHANT_USER_ID } from "@/lib/auth";
 import { approveDispute } from "@/lib/disputes/approve";
 import { buildApproveDeps } from "@/lib/disputes/runtime";
+import { SHARED_EXAMPLE_MESSAGE } from "@/lib/demo/copies";
 import { getSessionId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -55,6 +56,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
       );
     case "not_found":
       return NextResponse.json({ error: "not_found" }, { status: 404 });
+    case "shared_example":
+      return NextResponse.json({ error: "shared_example", message: SHARED_EXAMPLE_MESSAGE }, { status: 409 });
     case "not_analyzed":
       return NextResponse.json({ error: "not_analyzed", message: "This dispute has not been analysed yet." }, { status: 409 });
     case "wrong_action":
