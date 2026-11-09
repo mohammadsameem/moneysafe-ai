@@ -275,9 +275,16 @@
 
 ### M1-10 · Orders API routes
 
-- [ ] `GET /api/orders` — list from DB; include `riskScore`, `verdict`, `isDemo` in response
-- [ ] `GET /api/orders/[id]` and the PayPal return handler (M1-07b) score via `settings.merchant_avg_order_value_usd`; order creation itself is M1-07b
-- [ ] `GET /api/orders/[id]` — detail including signal breakdown, AI explanation, `usedFallback`
+- [x] `GET /api/orders` — list from DB; include `riskScore`, `verdict`, `isDemo` in response
+- [x] `GET /api/orders/[id]` and the PayPal return handler (M1-07b) score via `settings.merchant_avg_order_value_usd`; order creation itself is M1-07b
+- [x] `GET /api/orders/[id]` — detail including signal breakdown, AI explanation, `usedFallback`
+> M1-10 notes (13 new tests; 346 in total):
+>
+> - `src/lib/orders/queries.ts`: `toOrderSummary`, `toOrderDetail` and a Drizzle read repo. **Visibility rule:** seeded orders are visible to every session; any other order only to the session that created it. Someone else's order, an unknown id and a malformed id all answer `404 {error:"not_found"}`, so existence is not leaked and a bad id never reaches Postgres. The list is newest first, capped at 200.
+> - `GET /api/orders` returns `{ orders: [...] }` with `riskScore`, `verdict`, `isDemo` (true for seeded and demo orders, so the UI can show the "Demo data" badge, REQ-DEMO-07) and `usedFallback`. `GET /api/orders/[id]` returns `{ order }` adding the signal breakdown, AI explanation, verification draft, evidence completeness and shipping/buyer facts. Session ids and PayPal order/capture ids are never returned (tested).
+> - Scoring on the PayPal return path already uses `settings.merchant_avg_order_value_usd` and the active weights (M1-07b), and `toSignalWeightValues` (the camelCase-to-snake_case mapping) lives in `orders/weights.ts`. The detail route does not score on read: an order captured but not scored is scored the next time its return URL is opened.
+> - Verified against the live database: the list for a fresh session shows exactly the 10 seeded orders plus its own row and not another session's; `findVisible` returns seeds and own rows only. The test rows are deleted afterwards. The two routes themselves were tested with a mocked repo, not over HTTP.
+
 
 ---
 

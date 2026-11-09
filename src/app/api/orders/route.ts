@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createDrizzleReadRepo, toOrderSummary } from "@/lib/orders/queries";
 import { buildOrderDeps } from "@/lib/orders/runtime";
 import { CreateOrderRequestSchema } from "@/lib/orders/schemas";
 import { createSandboxOrder } from "@/lib/orders/service";
@@ -7,6 +8,15 @@ import { getSessionId } from "@/lib/session";
 export const dynamic = "force-dynamic";
 /** A demo order is scored, and AI-enriched, in this request; allow time for a slow model. */
 export const maxDuration = 60;
+
+/** The seeded orders plus this session's own, newest first, with risk score, verdict and `isDemo`. */
+export async function GET(): Promise<NextResponse> {
+  const sessionId = await getSessionId();
+  if (!sessionId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  const rows = await createDrizzleReadRepo().listVisible(sessionId);
+  return NextResponse.json({ orders: rows.map(toOrderSummary) });
+}
 
 /**
  * Create a PayPal sandbox order. Returns the URL to send the buyer to for approval. When PayPal
