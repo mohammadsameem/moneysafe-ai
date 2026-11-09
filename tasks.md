@@ -176,13 +176,24 @@
 
 ### M1-07b · Real sandbox order flow
 
-- [ ] `POST /api/orders` → `paypal.createOrder` with `intent: CAPTURE`, `return_url` = `/api/orders/paypal-return`, `cancel_url` = `/api/orders/paypal-cancel`; insert order as `status = created` with `paypal_order_id`; return `{ orderId, approvalUrl }`
+- [x] `POST /api/orders` → `paypal.createOrder` with `intent: CAPTURE`, `return_url` = `/api/orders/paypal-return`, `cancel_url` = `/api/orders/paypal-cancel`; insert order as `status = created` with `paypal_order_id`; return `{ orderId, approvalUrl }`
 - [ ] "New sandbox order" UI on the Orders page: small form (item, amount, shipping method, billing/shipping country) → redirects to `approvalUrl`
-- [ ] `GET /api/orders/paypal-return?token=…`: look up order by `paypal_order_id`, verify `session_id` matches caller, `paypal.captureOrder` → store `paypal_capture_id` and `status = captured` → ingest + score (settings baseline, active weights) → AI explanation via `callWithFallback` → redirect to `/orders/[id]`
-- [ ] `GET /api/orders/paypal-cancel?token=…`: set `status = cancelled`, redirect to `/orders`
+- [x] `GET /api/orders/paypal-return?token=…`: look up order by `paypal_order_id`, verify `session_id` matches caller, `paypal.captureOrder` → store `paypal_capture_id` and `status = captured` → ingest + score (settings baseline, active weights) → redirect to `/orders/[id]`
+- [ ] On the return path, AI explanation and verification draft via `callWithFallback`: the order flow already takes optional `OrderAiHooks` and saves the rule-based score first; M1-09 supplies the hooks
+- [x] `GET /api/orders/paypal-cancel?token=…`: set `status = cancelled`, redirect to `/orders`
 - [ ] `paypal.addTracking(paypalOrderId, { capture_id, tracking_number, carrier, notify_payer: false })` implemented against `POST /v2/checkout/orders/{id}/track` (called from the ship route in M3-03). **Confirm the exact path and payload against a real sandbox response** while building this task; adjust `types.ts` if the response differs.
 - [ ] Verify against the real sandbox with `DEMO_MODE=false`: create → approve → return → captured → scored. If the sandbox is unreachable, order creation falls back to a seeded record badged "Demo data" (REQ-DEMO-01).
-- [ ] Cookie config: session cookie `SameSite=Lax` so it survives the PayPal redirect
+- [x] Cookie config: session cookie `SameSite=Lax` so it survives the PayPal redirect
+
+> M1-07b notes (97 new tests; 210 in total, all offline):
+>
+> - **Built:** `src/lib/orders/` (`schemas`, `types`, `repo` (Drizzle), `service`, `weights`, `notices`, `runtime`); `POST /api/orders`, `GET /api/orders/paypal-return`, `GET /api/orders/paypal-cancel`; the auth backend the flow needs (`src/lib/auth.ts`, `src/lib/session.ts`, `/api/auth/[...nextauth]`). All I/O in the service is injected, so the rules are tested with an in-memory repo and a fake PayPal client.
+> - **Verified live against the real sandbox** (`DEMO_MODE=false`, dev server): demo sign-in (wrong password gives no session; each sign-in gets its own `sid`; cookie is `SameSite=Lax`, `HttpOnly`); `POST /api/orders` creates a real sandbox order (approval URL on `www.sandbox.paypal.com`, row stored as `created`, unscored, tagged with the caller's `sid`); a return before the buyer approves is refused by PayPal and handled (`capture_failed`, order stays `created`); another session cannot return or cancel the order; cancel marks it `cancelled` and a later return does not capture it; no session redirects to `/login`. The test rows were deleted afterwards.
+> - **Not verified live (the item above stays open):** the buyer approving in a sandbox buyer account, then a successful capture and scoring. That needs a person in a browser, and the login page and order form land in M1-11. `addTracking`'s path and body are also still unchecked against a real response.
+> - **Decisions:** `buyer_email` is NOT NULL but PayPal only reveals the payer's email at capture, so a created order holds `pending@paypal.invalid` (reserved TLD) until then. Only a capture whose status is `COMPLETED` counts as paid. `buyer_is_first_time` is derived at capture from earlier captured/shipped orders with the same email. Capture sends `PayPal-Request-Id: capture-<orderId>` so a retry after a lost response cannot capture twice. Two concurrent returns are resolved by a conditional `created -> captured` update; the loser does not score. If PayPal is not used (Demo Mode, no credentials, or a `PayPalError`), creation makes an `is_demo` order that is already `captured` and scored (buyer `demo.buyer@example.com`, first-time fixed true) and the API returns `approvalUrl: null, isDemo: true, reason`. The item name is not stored locally; the Evidence Vault (M3) reads it from PayPal `getOrder`.
+> - **Known limit:** `sid` is new on every sign-in, so an order left `created` by an expired session cannot be captured after logging in again.
+> - **Handed on:** M1-08 binds the activity logger into `runtime.ts` (`onFallback`, `onWarning` are `console.warn` placeholders) and logs the capture/score steps; M1-09 supplies `OrderAiHooks`; M1-10 can reuse `ingestAndScore` to score a captured-but-unscored order on read.
+> - **Build fix (separate commit):** `next build` had been failing since M1-07 because webpack turned `new URL('.', import.meta.url)` in `postgres/src/errors.js` into an asset and Terser could not parse it. `postgres` is now in `serverComponentsExternalPackages` (`next.config.mjs`). The build passes with all five API routes.
 
 ---
 
@@ -192,6 +203,7 @@
   - `logActivity(meta: ActivityMeta): Promise<void>` — inserts to `agent_activity`
   - PII scrub: replace email local-part with `***`
 - [ ] Export `ActivityMeta` type
+- [ ] Bind the logger into the order flow: `src/lib/orders/runtime.ts` (`onFallback`, `onWarning`), plus a `rule_engine` row for scoring and a `paypal_api` row for create/capture
 
 ---
 
@@ -228,6 +240,7 @@
 - [ ] `callWithFallback` calls `checkLlmBudget` first (the gate itself is already implemented in `call-with-fallback.ts` against an injected `checkBudget`; this task supplies the real `checkLlmBudget` and binds it). On breach: skip the LLM call, return the rule-based fallback with `usedFallback = true`, log `agent_activity` with `tool_name = 'llm_budget_exceeded'`, `status = 'fallback'`, and `input_summary` naming the limit. **No HTTP 429 anywhere.**
 - [ ] UI shows the visible note "AI unavailable — showing rule-based result." wherever `usedFallback` is true
 - [ ] `src/middleware.ts`: require a valid NextAuth session on every `/api/*` route **except** `/api/demo/status` and `/api/auth/*`; unauthenticated API calls return 401 JSON
+  - Decide before building: `GET /api/orders/paypal-return` and `/paypal-cancel` are browser navigations from PayPal. A JSON 401 there would show the buyer raw JSON. They already check the session themselves and redirect to `/login`, so either exempt them from the middleware or make the middleware redirect for those two paths (needs your call, because it changes the exemption list above)
 - [x] Add `LLM_DAILY_CAP` to `src/lib/env.ts` and `.env.example` (default 200; verified by `providers.test.ts`)
 - [ ] Unit tests (`src/lib/ai/__tests__/rate-limit.test.ts`): allowed under both limits; session breach → `{ allowed:false, reason:'session' }`; daily breach → `reason:'daily'`; counters not incremented on breach; session window resets after 1 hour; `callWithFallback` returns the fallback (no LLM call) on breach (this last case is already covered in `call-with-fallback.test.ts` with a fake `checkBudget`)
 

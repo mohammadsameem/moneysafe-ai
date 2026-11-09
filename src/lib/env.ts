@@ -126,6 +126,16 @@ export function getPayPalCredentials(
   return clientId && clientSecret ? { clientId, clientSecret } : null;
 }
 
+/**
+ * The app's public origin (NEXTAUTH_URL without any path or trailing slash). Used to build the
+ * absolute return/cancel URLs PayPal redirects the buyer to. Throws without echoing the value.
+ */
+export function getAppBaseUrl(source: Record<string, string | undefined> = process.env): string {
+  const parsed = z.string().url().safeParse(source.NEXTAUTH_URL?.trim());
+  if (!parsed.success) throw new Error("NEXTAUTH_URL must be set to the app's full URL. See .env.example.");
+  return new URL(parsed.data).origin;
+}
+
 /** True only when DEMO_MODE is exactly "true". */
 export function isDemoModeEnabled(source: Record<string, string | undefined> = process.env): boolean {
   return source.DEMO_MODE?.trim().toLowerCase() === "true";
