@@ -65,10 +65,10 @@ describe("formatCountdown", () => {
 describe("toDisputeView", () => {
   it("maps a stored analysis, and flags a stored analysis with no win probability as AI-unavailable", () => {
     const ai = toDisputeView(makeRecord(analysed()), NOW).analysis;
-    expect(ai).toMatchObject({ winProbability: 0.95, winLikelihoodLabel: "Strong", finalRecommendation: "contest", aiUnavailable: false });
+    expect(ai).toMatchObject({ winProbability: 0.95, llmAdjustment: 0, winLikelihoodLabel: "Strong", finalRecommendation: "contest", aiUnavailable: false });
 
     const noAi = toDisputeView(makeRecord(analysed({ winProbability: null, winLikelihoodLabel: null, llmAdjustment: null })), NOW).analysis;
-    expect(noAi).toMatchObject({ winProbability: null, winLikelihoodLabel: null, aiUnavailable: true });
+    expect(noAi).toMatchObject({ winProbability: null, llmAdjustment: null, winLikelihoodLabel: null, aiUnavailable: true });
   });
 
   it("has no analysis until one is computed", () => {

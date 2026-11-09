@@ -20,6 +20,8 @@ export function isResolvedStatus(status: Dispute["status"]): boolean {
 
 export interface DisputeAnalysisView {
   baseWinProbability: number | null;
+  /** The model's adjustment after the system clamped it to +/-0.1; null when the AI step was unavailable. */
+  llmAdjustment: number | null;
   /** Null when the AI step was unavailable: the page then shows no win-likelihood meter. */
   winProbability: number | null;
   winLikelihoodLabel: Dispute["winLikelihoodLabel"];
@@ -61,6 +63,7 @@ export function toAnalysisView(d: Dispute): DisputeAnalysisView | null {
   if (d.analysisComputedAt === null) return null;
   return {
     baseWinProbability: d.baseWinProbability,
+    llmAdjustment: d.llmAdjustment,
     winProbability: d.winProbability,
     winLikelihoodLabel: d.winLikelihoodLabel,
     systemRecommendation: d.systemRecommendation,

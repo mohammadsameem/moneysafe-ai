@@ -1,6 +1,6 @@
 import type { Dispute, EvidenceArtefact } from "@/db/schema";
 import { makeOrder } from "@/lib/orders/__tests__/fakes";
-import type { DisputeRecord, DisputesReadRepo } from "../types";
+import type { AnalysisPatch, DisputeRecord, DisputesAnalysisRepo, DisputesReadRepo } from "../types";
 
 export const NOW = new Date("2026-11-08T12:00:00.000Z");
 export const SESSION = "session-a";
@@ -80,5 +80,49 @@ export function createFakeReadRepo(records: DisputeRecord[], artefacts: Evidence
     listVisible: async (sessionId) => records.filter((r) => visible(r, sessionId)),
     findVisible: async (id, sessionId) => records.find((r) => r.dispute.id === id && visible(r, sessionId)) ?? null,
     getArtefacts: async (orderId) => artefacts.filter((a) => a.orderId === orderId),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Writable fake: mirrors the SQL semantics the services rely on.
+// ---------------------------------------------------------------------------
+export interface FakeAnalysisRepo extends DisputesAnalysisRepo {
+  records: DisputeRecord[];
+  saves: AnalysisPatch[];
+  /** Make the next saveAnalysis lose the race: another request saved `winner` first. */
+  loseNextSave(winner: AnalysisPatch): void;
+}
+
+export function createFakeAnalysisRepo(records: DisputeRecord[], artefacts: EvidenceArtefact[] = []): FakeAnalysisRepo {
+  const read = createFakeReadRepo(records, artefacts);
+  const saves: AnalysisPatch[] = [];
+  let winner: AnalysisPatch | null = null;
+
+  const apply = (id: string, patch: AnalysisPatch): Dispute | null => {
+    const i = records.findIndex((r) => r.dispute.id === id);
+    const current = records[i];
+    if (!current || current.dispute.analysisComputedAt !== null) return null; // WHERE analysis_computed_at IS NULL
+    const updated = { ...current.dispute, ...patch } as Dispute;
+    records[i] = { ...current, dispute: updated };
+    return updated;
+  };
+
+  return {
+    ...read,
+    records,
+    saves,
+    loseNextSave: (w) => {
+      winner = w;
+    },
+    async saveAnalysis(id, patch) {
+      saves.push(patch);
+      if (winner) {
+        const w = winner;
+        winner = null;
+        apply(id, w); // the other request got there first
+        return null;
+      }
+      return apply(id, patch);
+    },
   };
 }

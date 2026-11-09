@@ -371,7 +371,7 @@
 
 ### M2-03 · Dispute analysis API
 
-- [ ] `POST /api/disputes/[id]/analyze`:
+- [x] `POST /api/disputes/[id]/analyze`:
   - Guard: return cached if `analysis_computed_at IS NOT NULL`
   - Fetch dispute (PayPal or Demo); fetch artefacts from DB
   - `completeness = computeEvidenceCompleteness(artefacts)` (pure fn from M1-04)
@@ -380,6 +380,18 @@
   - `ai.disputeAnalyst.analyseDispute(...)` — clamp, compute final fields
   - If `final_recommendation = 'contest'`: `ai.disputeAnalyst.draftDisputeResponse(...)`
   - Write all fields; set `analysis_computed_at`; log all steps
+
+
+> M2-03 notes (16 new tests; 478 in total):
+>
+> - **`POST /api/disputes/[id]/analyze`** (`src/app/api/disputes/[id]/analyze/route.ts`, logic in `src/lib/disputes/analyze.ts`, wiring in `runtime.ts`). Returns `{ status: "cached" | "analyzed", usedFallback?, dispute }`; 401 without a session, 404 for an unknown, malformed or other session's dispute. `maxDuration = 60`; each model call is capped at 12 s per provider.
+> - **Cached (REQ-NFR-14):** a dispute with `analysis_computed_at` set returns its stored analysis and makes no model call and spends no budget. All three open seeds are cached. An analysis stored without AI is cached too (the model is not retried automatically).
+> - **Fresh dispute:** `assess_dispute` (pure: completeness, base win probability, EV, system recommendation) -> `dispute_analysis` -> `dispute_draft_response` only when the FINAL recommendation is contest (so a model override to refund skips the draft, and an override to contest adds one). Saved once with `WHERE analysis_computed_at IS NULL`: of two simultaneous requests the loser discards its result and returns the winner's. Stored: `base_win_probability` (4 decimals), `llm_adjustment`, `win_probability`, label, system/override/final recommendation, source, reasoning, evidence lists, `draft_response`, `risk_score_snapshot` (the order's score).
+> - **The view now exposes `llmAdjustment`** (null when the AI step was unavailable) so the UI can say how far the model moved the estimate.
+> - **Verified live** (dev server, real Supabase, real providers, signed in): no session 401; unknown and malformed ids 404; another session's dispute 404; SEED-C, SEED-D and SEED-E return `cached`, and for SEED-C no LLM budget was spent and no activity rows were written; a fresh un-analysed demo dispute on SEED-A's order was analysed through the real providers (Gemini errored, Groq answered both calls): base 1.0, win 0.95 Strong, contest, system source, a 65-word reasoning, an 812-character draft that cites the real tracking number and contains no buyer email or name, a row with `analysis_computed_at` and the risk snapshot, activity rows `assess_dispute`, `dispute_analysis` (error then success), `dispute_draft_response` (error then success), `save_analysis`; a second POST was `cached` and spent no further budget. The temporary rows were deleted.
+> - **Known issue, not fixed here:** a fresh analysis took about 28 s in that run, because Gemini times out on each of the two calls before Groq answers. Fix on the configuration side (a Gemini model that responds, or make Groq the primary) or reduce `DISPUTE_AI_TIMEOUT_MS`. Seeded disputes are unaffected (instant).
+> - **Race not covered live:** the double-click race is tested with a fake repository that mirrors the SQL (`WHERE analysis_computed_at IS NULL`); two simultaneous real requests would still both spend LLM budget before one of them loses.
+> - **Deviation:** the design's step "`paypal.getDispute(id)` first" is not done inside `analyze`; the deadline refresh from PayPal happens in the read layer (M2-01), and analysis needs only the local dispute and its order's evidence.
 
 ---
 

@@ -16,3 +16,30 @@ export interface DisputesReadRepo {
   findVisible(id: string, sessionId: string): Promise<DisputeRecord | null>;
   getArtefacts(orderId: string): Promise<EvidenceArtefact[]>;
 }
+
+/** Everything the analysis step writes onto a dispute row (design 7.3). */
+export interface AnalysisPatch {
+  baseWinProbability: number;
+  /** Null (with winProbability and the label) when the AI step was unavailable. */
+  llmAdjustment: number | null;
+  winProbability: number | null;
+  winLikelihoodLabel: Dispute["winLikelihoodLabel"];
+  systemRecommendation: NonNullable<Dispute["systemRecommendation"]>;
+  overrideRecommendation: Dispute["overrideRecommendation"];
+  finalRecommendation: NonNullable<Dispute["finalRecommendation"]>;
+  recommendationSource: NonNullable<Dispute["recommendationSource"]>;
+  reasoning: string;
+  evidenceUsed: string[];
+  evidenceGaps: string[];
+  draftResponse: string | null;
+  analysisComputedAt: string;
+  riskScoreSnapshot: number | null;
+}
+
+export interface DisputesAnalysisRepo extends DisputesReadRepo {
+  /**
+   * Save an analysis only while the dispute has none (`analysis_computed_at IS NULL`). Returns the
+   * updated row, or null when another request saved first (the caller then reads that one).
+   */
+  saveAnalysis(id: string, patch: AnalysisPatch): Promise<Dispute | null>;
+}

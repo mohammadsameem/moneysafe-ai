@@ -15,29 +15,10 @@ import {
   EVIDENCE_LIST_MAX_ITEMS,
 } from "../schemas";
 import { DISPUTE_ANALYSIS_TOOL, DISPUTE_DRAFT_RESPONSE_TOOL } from "../tools";
+import { BUYER_EMAIL, SEED_C, SEED_D, SEED_E, art } from "@/lib/evidence/__tests__/fixtures";
 import { GEMINI, GEMINI_URL, GROQ, PRIMARY_KEY, errorResponse, mockFetch, requestBody, toolCallResponse } from "./fixtures";
 
 const COSTS = { chargebackFeeUsd: 20, contestEffortUsd: 10 };
-const BUYER_EMAIL = "jane.private@example.com";
-
-// ---- realistic evidence (matches the seeded shapes) -----------------------------------------
-const art = (artefactType: string, payload: Record<string, unknown>): ArtefactInput => ({ artefactType, payload });
-const scans = (...statuses: string[]) =>
-  art("tracking_events", {
-    events: statuses.map((status, i) => ({ timestamp: `2026-11-0${i + 1}T10:00:00.000Z`, location: "Charlotte, NC", status, isMocked: true })),
-  });
-const basics = (item = "Hand-thrown stoneware dinner set"): ArtefactInput[] => [
-  art("invoice_summary", { orderId: "SEED-A", amount: 145, currency: "USD" }),
-  art("line_items", { items: [{ name: item, quantity: 1, unitAmount: 145 }] }),
-  art("buyer_contact", { email: BUYER_EMAIL, name: "Jane Private", addressLine1: "12 Secret Street", city: "Springfield", country: "US" }),
-  art("tracking_info", { trackingNumber: "9400111899223197428490", carrier: "USPS", shippedAt: "2026-11-01T08:00:00.000Z" }),
-];
-const comm = (direction: "inbound" | "outbound") => art("buyer_communication", { direction, subject: "s", body: "PRIVATE MESSAGE TEXT" });
-
-const SEED_C = [...basics(), scans("Label Created", "Picked Up", "In Transit", "Out for Delivery", "Delivered"), comm("outbound"), comm("inbound")];
-const SEED_D = basics("Hand-dyed wool scarf");
-const SEED_E = [...basics("Hand-woven wool area rug"), scans("Picked Up", "In Transit")];
-
 const subject = (over: Partial<DisputeSubject> = {}): DisputeSubject => ({
   disputeId: "dispute-1",
   orderId: "order-1",
