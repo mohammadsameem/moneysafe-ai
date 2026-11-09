@@ -540,10 +540,19 @@
 
 ### M3-02 · Evidence assembler
 
-- [ ] `src/lib/evidence/assembler.ts`:
+- [x] `src/lib/evidence/assembler.ts`:
   - `assembleEvidence(orderId, paypalOrder, trackingInput)` — inserts artefact rows (append-only; no UPDATE)
   - `getEvidenceByOrderId(orderId)` — fetch all artefacts
-- [ ] Note: `computeEvidenceCompleteness` is already in `src/lib/scoring/` from M1-04; assembler imports it from there
+- [x] Note: `computeEvidenceCompleteness` is already in `src/lib/scoring/` from M1-04; assembler imports it from there
+
+
+> M3-02 notes (9 new tests; 654 in total):
+>
+> - **`src/lib/evidence/assembler.ts`**: `buildShipmentArtefacts` (pure), `assembleEvidence(repo, args)`, `getEvidenceByOrderId(repo, orderId)`, `buildCommunicationArtefact`, `summarizeEvidence`. The signature takes the repo explicitly (`assembleEvidence(repo, { order, paypalOrder, shipment, tracking, now })`) instead of `(orderId, paypalOrder, trackingInput)`, so it is testable without a database.
+> - **What is recorded at shipment:** invoice summary (PayPal order, or the local order when PayPal was not used), line items (PayPal items only: **a demo order with no PayPal order gets no line items**, rather than invented ones, so it scores 75 not 90), buyer contact (local email + PayPal payer name), tracking number and carrier (merchant input), and the scan events (`mocked` / `isMocked` from the mocked provider, `tracking_api` from a real one). Buyer communications are appended later, one at a time.
+> - **Append-only (REQ-EV-03):** the evidence repository (`src/lib/evidence/repo.ts`) offers insert and select only; a test fails if either file contains an update or delete.
+> - **One scoring implementation:** `completenessBreakdown` was added to `src/lib/scoring/evidence-completeness.ts` (the seven REQ-EV-02 criteria with the tracking artefact split in two), and `computeEvidenceCompleteness` is now the sum of it; a test checks they agree for every fixture. The seed bundle is unchanged.
+> - **Verified against the live database:** a temporary order's shipment artefacts were stored and read back (5 rows, completeness 90, events flagged mocked) and removed.
 
 ---
 
