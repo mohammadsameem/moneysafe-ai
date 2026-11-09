@@ -151,10 +151,13 @@
 
 ### M1-06 · Unit test — no-write-without-approval invariant
 
-- [ ] `src/lib/paypal/__tests__/invariant.test.ts`:
+- [x] `src/lib/paypal/__tests__/invariant.test.ts` (8 tests):
   - Mock DB: `approval_records` returns no row → `submitEvidence` throws `ApprovalRequiredError`
   - Mock DB: `approval_records` returns no row → `acceptClaim` throws `ApprovalRequiredError`
   - Mock DB: returns approved row → no throw; PayPal call proceeds
+  - Beyond the list: a REJECTED row, an approval for a different dispute, an approval for the other action (accept_claim cannot authorise submit_evidence, and vice versa), an empty approval id, and a failing lookup all block the write (fail closed), and in every blocked case the PayPal call is never reached
+
+> M1-06 notes: the test needs `submitEvidence`/`acceptClaim`, whose full implementation is M2-05, so this task adds them as **gated skeletons**: `src/lib/paypal/approval-gate.ts` (`requireApproval`, pure, injected lookup, no `src/db` import), `src/lib/paypal/disputes.ts` (the two write functions; `requireApproval` runs first, then an injected `execute`), and `src/lib/paypal/errors.ts` (`PayPalError`, `ApprovalRequiredError`). M2-05 supplies the real `execute` (load the `action_executions` row, simulate or call PayPal with the stored `PayPal-Request-Id`); the gate does not change.
 
 ---
 
