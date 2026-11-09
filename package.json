@@ -15,6 +15,7 @@
     "llm:check": "tsx --env-file-if-exists=.env.local scripts/llm-check.ts",
     "db:seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
     "db:seed:verify": "tsx --env-file-if-exists=.env.local scripts/seed-verify.ts",
+    "qa:live": "tsx --env-file-if-exists=.env.local scripts/qa/live.ts",
     "qa:browser": "tsx --env-file-if-exists=.env.local scripts/qa/browser.ts"
   },
   "dependencies": {
