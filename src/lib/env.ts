@@ -115,6 +115,23 @@ export function getLlmEnv(source: Record<string, string | undefined> = process.e
 }
 
 /**
+ * PayPal sandbox credentials, or null when either is missing (the app then uses seeded data and
+ * simulated writes, REQ-DEMO-01). Never throws.
+ */
+export function getPayPalCredentials(
+  source: Record<string, string | undefined> = process.env,
+): { clientId: string; clientSecret: string } | null {
+  const clientId = source.PAYPAL_CLIENT_ID?.trim();
+  const clientSecret = source.PAYPAL_CLIENT_SECRET?.trim();
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
+}
+
+/** True only when DEMO_MODE is exactly "true". */
+export function isDemoModeEnabled(source: Record<string, string | undefined> = process.env): boolean {
+  return source.DEMO_MODE?.trim().toLowerCase() === "true";
+}
+
+/**
  * Just the runtime database URL (the pooled connection string).
  * Separate from getEnv() so DB scripts (seed, db:check) don't need auth secrets to be set.
  */

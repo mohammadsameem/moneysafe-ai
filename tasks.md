@@ -163,11 +163,14 @@
 
 ### M1-07 · PayPal service layer — orders
 
-- [ ] `src/lib/paypal/client.ts`: OAuth token manager + `paypalFetch` (auto-refresh, 60 s buffer)
-- [ ] `src/lib/paypal/orders.ts`: `createOrder` (returns `approvalUrl`), `captureOrder` (returns `captureId`), `getOrder`, `addTracking` with zod-validated response types
-- [ ] `src/lib/paypal/demo.ts`: `isDemoMode()`, `shouldSimulateWrite(dispute)`, `withDemoFallback(liveCall, seedKey)` wrapper
-- [ ] Custom error classes: `PayPalError`, `ApprovalRequiredError`
-- [ ] `GET /api/demo/status`: run `SELECT 1`; return `{ demoMode, db: 'ok' }` (200) or `{ demoMode, db: 'error' }` (503). Exempt from the session check.
+- [x] `src/lib/paypal/client.ts`: OAuth token manager + `request()` helper (token cached, refreshed 60 s before expiry, concurrent callers share one token request, a 401 drops the token and retries once, `PayPal-Request-Id` supported; errors carry PayPal's name / message / `debug_id` but never credentials, tokens or bodies). Fetch and clock are injected
+- [x] `src/lib/paypal/orders.ts`: `createOrder` (returns `approvalUrl` from the `payer-action` or `approve` link; return/cancel URLs in `payment_source.paypal.experience_context`), `captureOrder` (returns `captureId`), `getOrder`, `addTracking`, all with zod-validated responses (`types.ts`)
+- [x] `src/lib/paypal/demo.ts`: `isDemoMode()`, `shouldSimulateWrite(record)`, `withDemoFallback(liveCall | null, seed, { onFallback })` (DEMO_MODE, missing credentials, or a `PayPalError` return seeded data flagged `isDemo`; a non-PayPal error is rethrown so a bug is not disguised as demo data)
+- [x] Custom error classes: `PayPalError`, `ApprovalRequiredError` (`errors.ts`, added in M1-06)
+- [x] `GET /api/demo/status`: runs `SELECT 1`; returns `{ demoMode, db: 'ok' }` (200) or `{ demoMode, db: 'error' }` (503) with no error detail. **Exempt from the session check is enforced by the middleware in M1-09b.**
+- [x] `src/lib/paypal/index.ts`: the single import boundary, plus `getPayPalClient()` (null when credentials are absent). Tests: 33 (client 11, orders 11, demo 8, status route 3), all with `fetch` mocked
+
+> M1-07 notes: everything is verified against a mocked `fetch` only; no PayPal credentials are in `.env.local`, so nothing has been called live. The add-tracking body (`capture_id`, `tracking_number`, `carrier`, `notify_payer`) follows PayPal's documented field names, but the reference page could not be read in full, so the exact path and payload still need the live check listed in M1-07b.
 
 ---
 
