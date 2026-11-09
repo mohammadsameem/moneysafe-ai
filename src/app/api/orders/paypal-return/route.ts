@@ -7,7 +7,7 @@ import { handlePayPalReturn } from "@/lib/orders/service";
 import { getSessionId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
-/** Capture, scoring and the AI steps run in this request; allow time for a slow model (each call is capped at 12 s). */
+/** Capture, scoring and the AI steps run in this request. The two AI calls run in parallel: worst case 2 providers x 8 s = 16 s. */
 export const maxDuration = 60;
 
 /**

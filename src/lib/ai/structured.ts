@@ -30,7 +30,7 @@ import {
   LlmUnavailableError,
   LlmValidationError,
 } from "./errors";
-import type { LlmProvider } from "./providers";
+import { LLM_PROVIDER_TIMEOUT_MS, type LlmProvider } from "./providers";
 
 export interface StructuredTool {
   name: string;
@@ -103,15 +103,18 @@ export async function callStructured<T>(options: StructuredOptions<T>): Promise<
 }
 
 async function runOnProvider<T>(provider: LlmProvider, options: StructuredOptions<T>): Promise<StructuredResult<T>> {
+  // One time allowance per provider, shared by the pinned attempt and the JSON-only retry, so a
+  // provider can never use more than `timeoutMs` in total.
+  const deadline = Date.now() + (options.timeoutMs ?? LLM_PROVIDER_TIMEOUT_MS);
   try {
-    return await attempt(provider, options, "tool");
+    return await attempt(provider, options, "tool", deadline);
   } catch (err) {
     // Only a 400/422 means "this provider refused the pinned tool_choice". Rate limits, outages,
     // auth errors and timeouts go straight to the next provider.
     const rejected =
       err instanceof LlmProviderError && err.kind === "http" && (err.status === 400 || err.status === 422);
     if (!rejected) throw err;
-    return await attempt(provider, options, "json");
+    return await attempt(provider, options, "json", deadline);
   }
 }
 
@@ -119,6 +122,7 @@ async function attempt<T>(
   provider: LlmProvider,
   options: StructuredOptions<T>,
   mode: AttemptMode,
+  deadline: number,
 ): Promise<StructuredResult<T>> {
   const started = Date.now();
   const report = async (outcome: LlmAttempt["outcome"], detail: string, via?: LlmAttempt["via"]) => {
@@ -141,7 +145,8 @@ async function attempt<T>(
   try {
     const response = await postChatCompletion(provider, buildRequest(provider, options, mode), {
       fetchImpl: options.fetchImpl,
-      timeoutMs: options.timeoutMs,
+      // What is left of this provider's allowance (at least 1 ms, so an exhausted one fails fast as a timeout).
+      timeoutMs: Math.max(1, deadline - Date.now()),
     });
     const { data, via } = readStructured(response, provider, options);
     await report("success", "ok", via);

@@ -5,7 +5,7 @@
  * Errors never include the response body (providers sometimes echo parts of the key in 401s).
  */
 import { LlmProviderError } from "./errors";
-import type { LlmProvider } from "./providers";
+import { LLM_PROVIDER_TIMEOUT_MS, type LlmProvider } from "./providers";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -35,7 +35,7 @@ export interface ChatCompletionResponse {
   }[];
 }
 
-export const DEFAULT_TIMEOUT_MS = 30_000;
+export const DEFAULT_TIMEOUT_MS = LLM_PROVIDER_TIMEOUT_MS;
 
 /**
  * `{baseUrl}/chat/completions`, appended to the URL's path so that a query string on the base

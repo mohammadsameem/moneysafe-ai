@@ -176,3 +176,72 @@ describe("not configured", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("per-provider time allowance (shared by the pinned attempt and the JSON retry)", () => {
+  /** A fetch that never answers; it fails only when the caller aborts it, like a real hung connection. */
+  const hanging = (): typeof fetch =>
+    ((_url: unknown, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+      })) as typeof fetch;
+
+  it("the default allowance is 8 seconds", async () => {
+    const { LLM_PROVIDER_TIMEOUT_MS } = await import("../providers");
+    const { DEFAULT_TIMEOUT_MS } = await import("../chat-completions");
+    expect(LLM_PROVIDER_TIMEOUT_MS).toBe(8_000);
+    expect(DEFAULT_TIMEOUT_MS).toBe(8_000);
+  });
+
+  it("a hung provider is abandoned after its allowance and the next provider is tried", async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+      calls.push(String(url));
+      if (String(url).startsWith(GROQ_URL.slice(0, 20))) return toolCallResponse({ explanation: "From the fallback." });
+      return hanging()(url as string, init);
+    }) as typeof fetch;
+
+    const started = Date.now();
+    const out = await callStructured({ providers: [GEMINI, GROQ], tool: TOOL, schema: SCHEMA, prompt: PROMPT, fetchImpl, timeoutMs: 60 });
+
+    expect(out.data).toEqual({ explanation: "From the fallback." });
+    expect(out.provider).toBe("groq");
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("the JSON-only retry uses only what is LEFT of the allowance, so a provider never exceeds it", async () => {
+    let call = 0;
+    const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+      call += 1;
+      if (call === 1) {
+        await new Promise((r) => setTimeout(r, 120)); // the pinned attempt is rejected, but only after 120 ms
+        return errorResponse(400);
+      }
+      return hanging()(url as string, init); // the retry hangs
+    }) as typeof fetch;
+
+    const started = Date.now();
+    await expect(callStructured({ providers: [GEMINI], tool: TOOL, schema: SCHEMA, prompt: PROMPT, fetchImpl, timeoutMs: 200 })).rejects.toThrow();
+    const elapsed = Date.now() - started;
+
+    expect(call).toBe(2);
+    expect(elapsed).toBeGreaterThanOrEqual(190); // it did wait for the allowance...
+    expect(elapsed).toBeLessThan(400); // ...but not a second full allowance (which would be ~320 ms)
+  });
+
+  it("an exhausted allowance makes the retry fail fast as a timeout instead of waiting again", async () => {
+    let call = 0;
+    const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+      call += 1;
+      if (call === 1) {
+        await new Promise((r) => setTimeout(r, 80));
+        return errorResponse(422);
+      }
+      return hanging()(url as string, init);
+    }) as typeof fetch;
+
+    const started = Date.now();
+    await expect(callStructured({ providers: [GEMINI], tool: TOOL, schema: SCHEMA, prompt: PROMPT, fetchImpl, timeoutMs: 50 })).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(300);
+  });
+});

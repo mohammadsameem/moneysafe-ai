@@ -45,9 +45,9 @@ Add each to **Production** (and **Preview** if you want preview deployments to w
 | `CHARGEBACK_FEE_USD` | no | Default 20 |
 | `CONTEST_EFFORT_USD` | no | Default 10 |
 | `LLM_API_KEY` | no | Primary provider key. Empty means no model is ever called and every AI feature uses its rule-based result |
-| `LLM_BASE_URL`, `LLM_MODEL` | no | Defaults: Gemini's OpenAI-compatible endpoint, `gemini-3.8-flash` |
+| `LLM_BASE_URL`, `LLM_MODEL` | no | Recommended: Groq, `https://api.groq.com/openai/v1` and `openai/gpt-oss-120b` (the code defaults are Gemini's, so set these) |
 | `LLM_FALLBACK_API_KEY` | no | Second provider, tried once if the first fails. Ignored if `LLM_API_KEY` is empty |
-| `LLM_FALLBACK_BASE_URL`, `LLM_FALLBACK_MODEL` | no | Defaults: Groq, `openai/gpt-oss-120b` |
+| `LLM_FALLBACK_BASE_URL`, `LLM_FALLBACK_MODEL` | no | Recommended: Gemini, `https://generativelanguage.googleapis.com/v1beta/openai/` and `gemini-3.8-flash` (the code defaults are Groq's, so set these) |
 | `LLM_DAILY_CAP` | no | Calls per UTC day across everyone. Default 200 |
 
 ### The `NEXTAUTH_URL` chicken-and-egg

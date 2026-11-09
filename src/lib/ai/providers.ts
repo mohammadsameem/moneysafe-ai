@@ -3,6 +3,13 @@
  */
 import { getLlmEnv, type LlmEnv } from "../env";
 
+/**
+ * The most time ONE provider gets for one structured call, pinned attempt and JSON-only retry
+ * together. With a primary and a fallback the worst case for a call is therefore twice this, which
+ * is what keeps a route's total worst-case time (two sequential calls) well under its maxDuration.
+ */
+export const LLM_PROVIDER_TIMEOUT_MS = 8_000;
+
 export interface LlmProvider {
   role: "primary" | "fallback";
   /** Short name used in logs and agent_activity, e.g. "gemini". Never contains the key. */

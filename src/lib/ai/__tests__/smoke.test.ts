@@ -146,3 +146,34 @@ describe("chatCompletionsUrl", () => {
     expect(chatCompletionsUrl("https://x.test/v1?api-version=2024")).toBe("https://x.test/v1/chat/completions?api-version=2024");
   });
 });
+
+describe("smoke latency", () => {
+  const target: SmokeTarget = {
+    role: "primary",
+    label: "groq",
+    model: "openai/gpt-oss-120b",
+    baseUrl: "https://api.groq.com/openai/v1",
+    apiKey: PRIMARY_KEY,
+    keyVar: "LLM_API_KEY",
+  };
+
+  it("records the wall-clock time of the call and prints it, in milliseconds, without any key", async () => {
+    const fetchMock = mockFetch().mockImplementationOnce(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      return toolCallResponse({ ok: true }, "ping");
+    });
+
+    const result = await runSmoke(target, fetchMock);
+
+    expect(result.latencyMs).toBeGreaterThanOrEqual(25);
+    const line = formatSmokeLine(result);
+    expect(line).toMatch(/HTTP 200\s+\d+ ms/);
+    expect(line).not.toContain(PRIMARY_KEY);
+  });
+
+  it("a skipped provider has no latency", async () => {
+    const result = await runSmoke({ ...target, apiKey: undefined }, mockFetch());
+    expect(result.latencyMs).toBeUndefined();
+    expect(formatSmokeLine(result)).not.toMatch(/\d+ ms/);
+  });
+});

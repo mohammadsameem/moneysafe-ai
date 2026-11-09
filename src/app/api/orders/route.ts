@@ -6,7 +6,7 @@ import { createSandboxOrder } from "@/lib/orders/service";
 import { getSessionId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
-/** A demo order is scored, and AI-enriched, in this request; allow time for a slow model. */
+/** A demo order is scored, and AI-enriched, in this request (two parallel calls, worst case 16 s). */
 export const maxDuration = 60;
 
 /** The seeded orders plus this session's own, newest first, with risk score, verdict and `isDemo`. */

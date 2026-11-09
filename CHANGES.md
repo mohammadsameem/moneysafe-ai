@@ -6,6 +6,10 @@ Notable changes to the spec and architecture, newest first. Task-by-task progres
 ## Deviation log
 One line per deviation from the written specs, newest first.
 
+- 2026-11-08 REQ-NFR-13 / M1-09: every provider now gets at most 8 s per structured call in total (the pinned attempt and the JSON-only retry share it), replacing the 30 s default and the per-caller 12 s overrides. Worst case per call is 2 providers x 8 s = 16 s.
+- 2026-11-08 REQ-NFR-04: recommended provider order is Groq primary, Gemini fallback (Gemini timed out or returned 503 in testing). The code defaults are unchanged; `.env.example` and `DEPLOY.md` now show Groq as primary. `.env.local` was swapped by script, without printing any value.
+- 2026-11-08 REQ-NFR-18 / routes: a test now requires every route that can reach a model to export `maxDuration` (60) and checks that the worst case plus a 15 s margin fits. Vercel docs (page dated 2026-08-24): with Fluid compute Hobby defaults to and is capped at 300 s; the older limit was 60 s, which 60 satisfies.
+
 - 2026-11-08 M2-04: the action to approve is derived from the final recommendation (contest -> submit_evidence, refund -> accept_claim), not chosen by the client; a request for the other action is 409. Approving a refund takes no edited draft.
 - 2026-11-08 M2-04 / REQ-DIS-09: `accept_claim` completion marks the execution done, resolves the dispute, inserts the `dispute_outcomes` row (ON CONFLICT DO NOTHING) and bumps the counter in ONE transaction, and the counter moves only if that row was inserted. The "run learning loop check" step is an unbound `onOutcomeRecorded` hook until M4.
 - 2026-11-08 M2-05 before M2-04: built first because the M2-04 tests exercise the real executor. `submitEvidence` / `acceptClaim` keep their M1-06 signatures; the approve handler passes the approval and execution it already holds to `executeApproved` (src/lib/disputes/executor.ts) instead of the PayPal functions loading the row themselves.

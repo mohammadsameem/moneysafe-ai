@@ -4,7 +4,10 @@ import { buildAnalyzeDeps } from "@/lib/disputes/runtime";
 import { getSessionId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
-/** Two model calls (analysis, then a draft), each capped at 12 s per provider. */
+/**
+ * Two model calls in a row (the analysis, then a draft), each giving every provider at most 8 s:
+ * worst case 2 providers x 8 s x 2 calls = 32 s. 60 s is valid on every Vercel Hobby configuration.
+ */
 export const maxDuration = 60;
 
 /**

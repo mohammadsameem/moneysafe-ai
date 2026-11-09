@@ -38,8 +38,6 @@ import { callStructured } from "./structured";
 import { DISPUTE_ANALYSIS_TOOL, DISPUTE_DRAFT_RESPONSE_TOOL } from "./tools";
 import type { ExplainerDeps } from "./risk-explainer";
 
-/** Each dispute AI call is bounded so a slow provider cannot hold the page open for long. */
-export const DISPUTE_AI_TIMEOUT_MS = 12_000;
 /** An override needs a real explanation; shorter than this and it is ignored. */
 export const MIN_OVERRIDE_REASONING_CHARS = 20;
 
@@ -158,7 +156,6 @@ export async function analyseDispute(
           contestEffortUsd: assessment.contestEffortUsd,
         }),
         onAttempt: call.onAttempt,
-        timeoutMs: DISPUTE_AI_TIMEOUT_MS,
         fetchImpl: deps.fetchImpl,
       });
 
@@ -232,7 +229,6 @@ export async function draftDisputeResponse(
         schema: DraftResponseSchema,
         prompt: buildDraftResponsePrompt(promptInput(subject, completeness)),
         onAttempt: call.onAttempt,
-        timeoutMs: DISPUTE_AI_TIMEOUT_MS,
         fetchImpl: deps.fetchImpl,
       }).then((r) => r.data.response_text),
     fallbackDraft(subject),

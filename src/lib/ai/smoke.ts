@@ -82,6 +82,8 @@ export interface SmokeResult {
   rejectedStatus?: number;
   pinned?: PinnedOutcome;
   jsonRetryUsed?: boolean;
+  /** Wall-clock time of the whole call for this provider, in milliseconds (not set when skipped). */
+  latencyMs?: number;
   /** Short reason for a failure or a skip. At most 80 characters. */
   detail?: string;
 }
@@ -110,6 +112,7 @@ export async function runSmoke(target: SmokeTarget, fetchImpl: typeof fetch = fe
   const attempts: LlmAttempt[] = [];
 
   let failure: unknown;
+  const startedAt = Date.now();
   try {
     await callStructured({
       providers: [provider], // this provider only: no fallback chain
@@ -138,6 +141,7 @@ export async function runSmoke(target: SmokeTarget, fetchImpl: typeof fetch = fe
   const result: SmokeResult = {
     ...base,
     status: failure ? "fail" : "pass",
+    latencyMs: Date.now() - startedAt,
     httpStatus: statuses.length > 0 ? statuses[statuses.length - 1] : undefined,
     pinned,
     jsonRetryUsed: jsonAttempt !== undefined,
@@ -169,5 +173,6 @@ export function formatSmokeLine(r: SmokeResult): string {
       : PINNED_TEXT[r.pinned ?? "unknown"];
   const retry = `JSON retry: ${r.jsonRetryUsed ? "used" : "not needed"}`;
   const verdict = r.status === "pass" ? "PASS" : `FAIL (${r.detail})`;
-  return `${who}  ${http}  ${pinned}  ${retry}  ${verdict}`;
+  const latency = r.latencyMs !== undefined ? `  ${r.latencyMs} ms` : "";
+  return `${who}  ${http}${latency}  ${pinned}  ${retry}  ${verdict}`;
 }

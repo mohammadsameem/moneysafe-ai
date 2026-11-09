@@ -19,8 +19,6 @@ import { RiskExplanationSchema, VerificationDraftSchema } from "./schemas";
 import { callStructured } from "./structured";
 import { RISK_EXPLANATION_TOOL, VERIFICATION_DRAFT_TOOL } from "./tools";
 
-/** Each order AI call is bounded so a slow provider cannot hold up the buyer's redirect. */
-export const ORDER_AI_TIMEOUT_MS = 12_000;
 
 export interface ExplainerDeps {
   /** isConfigured / checkBudget / logActivity, bound by the caller. */
@@ -79,7 +77,6 @@ export async function explainRisk(order: Order, ctx: ExplainerContext, deps: Exp
         schema: RiskExplanationSchema,
         prompt: buildRiskPrompt(prompt, signals, ctx.lineItemNames),
         onAttempt: call.onAttempt,
-        timeoutMs: ORDER_AI_TIMEOUT_MS,
         fetchImpl: deps.fetchImpl,
       }).then((r) => r.data.explanation),
     ruleBasedExplanation(prompt, signals),
@@ -103,7 +100,6 @@ export async function draftVerification(
         schema: VerificationDraftSchema,
         prompt: buildVerificationPrompt(prompt, signals, ctx.lineItemNames),
         onAttempt: call.onAttempt,
-        timeoutMs: ORDER_AI_TIMEOUT_MS,
         fetchImpl: deps.fetchImpl,
       }).then((r) => ({ subject: r.data.subject, body: r.data.body })),
     staticVerificationDraft(signals),
