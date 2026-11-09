@@ -37,6 +37,9 @@ export function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
+/** The note shown wherever a rule-based result stands in for an AI one. */
+export const AI_UNAVAILABLE_NOTE = "AI unavailable \u2014 showing rule-based result.";
+
 export const SIGNAL_LABEL: Record<string, string> = {
   country_mismatch: "Billing and shipping countries differ",
   first_time_high_value: "First-time buyer, high value",

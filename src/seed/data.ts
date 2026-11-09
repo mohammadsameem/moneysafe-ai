@@ -53,6 +53,10 @@ export interface SeedBundle {
   insights: NewInsightsCacheRow;
 }
 
+/** The reasoning on the seeded pending weight-change proposal (REQ-DEMO-07). The Insights page recognises it to show the Demo data badge. */
+export const SEED_PROPOSAL_REASONING =
+  "Of the five resolved disputes in the demo history, the only loss (H3, $210) came from a first-time buyer on a high-value order, while both wins were returning buyers with complete evidence. That suggests first-time, high-value orders deserve slightly more weight. Proposed: raise 'first-time buyer, high value' from 20 to 23 (+3). The other five weights stay as they are. Five outcomes is a very small sample, so the change is capped at 3 points per cycle and nothing is applied until you approve it.";
+
 /** Placeholder for open seed disputes; the real deadline is now + deadline_offset_hours at read time. */
 export const SEED_DEADLINE_PLACEHOLDER = "2099-01-01T00:00:00Z";
 
@@ -690,8 +694,7 @@ export function buildSeedBundle(now: Date = new Date()): SeedBundle {
     proposedHighRelativeValue: 20,
     proposedDisposableEmail: 15,
     proposedRepeatedAttempts: 10,
-    proposalReasoning:
-      "Of the five resolved disputes in the demo history, the only loss (H3, $210) came from a first-time buyer on a high-value order, while both wins were returning buyers with complete evidence. That suggests first-time, high-value orders deserve slightly more weight. Proposed: raise 'first-time buyer, high value' from 20 to 23 (+3). The other five weights stay as they are. Five outcomes is a very small sample, so the change is capped at 3 points per cycle and nothing is applied until you approve it.",
+    proposalReasoning: SEED_PROPOSAL_REASONING,
     proposalCreatedAt,
     createdAt: at(now, -60 * DAY),
     updatedAt: proposalCreatedAt,

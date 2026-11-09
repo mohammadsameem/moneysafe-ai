@@ -189,11 +189,9 @@ export function createFakeInsightsRepo(init: { weights?: Partial<SignalWeights>;
 
 /** LLM dependencies that count budget checks (one per model call) and record log entries. */
 export function fakeLlmDeps(overrides: Partial<LlmDeps> = {}) {
-  const deps = {
-    isConfigured: vi.fn(() => true),
-    checkBudget: vi.fn(async () => ({ allowed: true })),
-    logActivity: vi.fn(async () => undefined),
-    ...overrides,
-  } satisfies LlmDeps;
-  return deps;
+  return {
+    isConfigured: vi.fn<LlmDeps["isConfigured"]>(overrides.isConfigured ?? (() => true)),
+    checkBudget: vi.fn<LlmDeps["checkBudget"]>(overrides.checkBudget ?? (async () => ({ allowed: true }))),
+    logActivity: vi.fn<LlmDeps["logActivity"]>(overrides.logActivity ?? (async () => undefined)),
+  };
 }

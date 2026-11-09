@@ -34,6 +34,9 @@ const MODEL_ROUTES: Record<string, RouteBudget> = {
   // PayPal write precedes it (one request, at most its 20 s timeout; a failed write never reaches the loop).
   "disputes/[id]/approve/route.ts": { calls: 2, providerSeconds: LOOP_SECONDS, otherSeconds: 20 },
   "disputes/[id]/simulate-outcome/route.ts": { calls: 2, providerSeconds: LOOP_SECONDS },
+  // Approving or rejecting weights changes what the cached summary describes: one refresh call.
+  "insights/approve-weights/route.ts": { calls: 1, providerSeconds: LOOP_SECONDS },
+  "insights/reject-weights/route.ts": { calls: 1, providerSeconds: LOOP_SECONDS },
 };
 
 /** Routes that build the model-capable dependencies but never call a model, with the reason. */

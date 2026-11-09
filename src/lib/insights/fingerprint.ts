@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import type { SignalWeights } from "@/db/schema";
+import { toSignalWeightValues } from "@/lib/orders/weights";
 
 /**
  * The inputs that decide whether the cached Insights AI summary is stale (design.md section 7.4):
@@ -18,10 +20,20 @@ export interface InsightsFingerprintInput {
   };
 }
 
+/** The fingerprint of the live state: the outcome stats and the active signal_weights row. */
+export function currentFingerprint(stats: { total: number; latestOutcomeId: string | null }, row: SignalWeights): string {
+  return computeInsightsFingerprint({
+    outcomeCount: stats.total,
+    latestOutcomeId: stats.latestOutcomeId,
+    proposalCreatedAt: row.proposalCreatedAt,
+    weights: toSignalWeightValues(row),
+  });
+}
+
 /**
  * SHA-256 over a canonical, fixed-order encoding of the inputs.
  * This is the single source of truth: the seed runner stores it in insights_cache, and the
- * Insights write paths (M4) recompute it to decide whether the summary needs regenerating.
+ * Insights write paths recompute it to decide whether the summary needs regenerating.
  */
 export function computeInsightsFingerprint(input: InsightsFingerprintInput): string {
   const w = input.weights;
