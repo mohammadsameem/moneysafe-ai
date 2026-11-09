@@ -81,3 +81,80 @@ export function staticVerificationDraft(signals: readonly PromptSignal[]): { sub
     ].join("\n"),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Dispute fallbacks (used when the model is unavailable)
+// ---------------------------------------------------------------------------
+export interface RuleBasedDisputeInput {
+  reason: "item_not_received" | "not_as_described";
+  amountUsd: number;
+  completeness: number;
+  baseWinProbability: number;
+  systemRecommendation: "contest" | "refund";
+  expectedValueUsd: number;
+  chargebackFeeUsd: number;
+  contestEffortUsd: number;
+}
+
+const signedUsd = (n: number): string => `${n < 0 ? "-" : "+"}$${Math.abs(n).toFixed(2)}`;
+
+/** The reasoning shown when the AI step is unavailable: only the system's own numbers, in plain English. */
+export function ruleBasedDisputeReasoning(i: RuleBasedDisputeInput): string {
+  const what = i.reason === "item_not_received" ? "an item-not-received" : "a not-as-described";
+  const verdict =
+    i.systemRecommendation === "contest"
+      ? "contesting is worth it on these numbers"
+      : "a refund costs less than the expected cost of contesting";
+  return (
+    `This is ${what} dispute. Evidence completeness is ${i.completeness}%, which gives a base win likelihood of ${Math.round(i.baseWinProbability * 100)}%. ` +
+    `At ${usd(i.amountUsd)}, contesting has an expected value of about ${signedUsd(i.expectedValueUsd)} after the ${usd(i.chargebackFeeUsd)} chargeback fee and ${usd(i.contestEffortUsd)} effort cost, so ${verdict}. ` +
+    `Recommendation: ${i.systemRecommendation}. The AI step was unavailable, so this is the system's rule-based recommendation.`
+  );
+}
+
+export interface RuleBasedDraftInput {
+  reason: "item_not_received" | "not_as_described";
+  amountUsd: number;
+  itemName: string | null;
+  carrier: string | null;
+  trackingNumber: string | null;
+  shippedOn: string | null;
+  /** Latest scan status and date, if there are scans. */
+  lastScan: { status: string; date: string } | null;
+  deliveredOn: string | null;
+}
+
+const cleanName = (name: string | null): string => {
+  const text = (name ?? "").replace(/\s+/g, " ").trim().slice(0, 100);
+  return text === "" ? "this order" : text;
+};
+
+/** A factual draft built only from what is on file. The merchant reviews and may edit it before anything is sent. */
+export function ruleBasedDraftResponse(i: RuleBasedDraftInput): string {
+  const item = cleanName(i.itemName);
+  const lines: string[] = ["Hello PayPal Dispute Team,", ""];
+
+  if (i.reason === "item_not_received") {
+    lines.push(`I am responding to the item-not-received claim on this order (${item}, ${usd(i.amountUsd)}).`);
+    if (i.trackingNumber) {
+      lines.push(
+        `The order shipped with ${i.carrier ?? "the carrier"} under tracking number ${i.trackingNumber}${i.shippedOn ? ` on ${i.shippedOn}` : ""}.`,
+      );
+    } else {
+      lines.push("I do not have a tracking number on file for this order.");
+    }
+    if (i.deliveredOn) {
+      lines.push(`The carrier's scan history shows the parcel was marked Delivered on ${i.deliveredOn}.`);
+    } else if (i.lastScan) {
+      lines.push(`The carrier's latest scan is "${i.lastScan.status}" on ${i.lastScan.date}, so the parcel has not been reported lost or returned.`);
+    }
+    lines.push("", "I have attached the invoice, line items, delivery address and tracking details, and I ask that the claim be decided in my favour.");
+  } else {
+    lines.push(`I am responding to the not-as-described claim on this order (${item}, ${usd(i.amountUsd)}).`);
+    lines.push("I believe the item matches its listing. The invoice and line items on file show exactly what was ordered and sent.");
+    lines.push("", "I am happy to provide any further details you need to review the claim.");
+  }
+
+  lines.push("", "Thank you,", "[Your name]");
+  return lines.join("\n");
+}

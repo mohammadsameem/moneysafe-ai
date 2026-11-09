@@ -24,7 +24,7 @@ import {
   VerificationDraftSchema,
   countWords,
 } from "../schemas";
-import { RISK_EXPLANATION_TOOL, VERIFICATION_DRAFT_TOOL } from "../tools";
+import { DISPUTE_ANALYSIS_TOOL, DISPUTE_DRAFT_RESPONSE_TOOL, RISK_EXPLANATION_TOOL, VERIFICATION_DRAFT_TOOL } from "../tools";
 import {
   GEMINI,
   GEMINI_URL,
@@ -199,7 +199,7 @@ describe("tools stay in step with the zod schemas", () => {
   });
 
   it("use only JSON-schema keywords Gemini's OpenAI compatibility layer accepts", () => {
-    const allowed = new Set(["type", "description", "properties", "required", "maxLength"]);
+    const allowed = new Set(["type", "description", "properties", "required", "maxLength", "items", "enum", "minimum", "maximum", "maxItems"]);
     // Collect every schema keyword. Property names (the keys under "properties") are data, not keywords.
     const walk = (node: unknown): string[] => {
       if (Array.isArray(node) || typeof node !== "object" || node === null) return [];
@@ -207,7 +207,7 @@ describe("tools stay in step with the zod schemas", () => {
         k === "properties" ? Object.values(v as object).flatMap(walk) : [k, ...walk(v)],
       );
     };
-    for (const tool of [RISK_EXPLANATION_TOOL, VERIFICATION_DRAFT_TOOL]) {
+    for (const tool of [RISK_EXPLANATION_TOOL, VERIFICATION_DRAFT_TOOL, DISPUTE_ANALYSIS_TOOL, DISPUTE_DRAFT_RESPONSE_TOOL]) {
       expect(walk(tool.parameters).filter((k) => !allowed.has(k))).toEqual([]);
     }
   });

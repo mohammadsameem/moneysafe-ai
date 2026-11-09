@@ -120,3 +120,90 @@ export function buildVerificationPrompt(order: PromptOrder, signals: readonly Pr
     "</data>",
   ].join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// Dispute prompts (design 5.3)
+// ---------------------------------------------------------------------------
+export interface DisputePromptInput {
+  reason: "item_not_received" | "not_as_described";
+  amountUsd: number;
+  /** UNTRUSTED: written by the buyer. Escaped and capped; only ever placed inside <data>. */
+  buyerMessage: string | null;
+  lineItemNames: readonly string[];
+  /** Facts built by our own code (describeEvidence). They contain no buyer message text. */
+  evidenceLines: readonly string[];
+}
+
+export const MAX_BUYER_MESSAGE_CHARS = 1000;
+export const MAX_EVIDENCE_LINES = 12;
+export const MAX_EVIDENCE_LINE_CHARS = 600;
+
+const REASON_TEXT: Record<DisputePromptInput["reason"], string> = {
+  item_not_received: "item_not_received (the buyer says the item never arrived)",
+  not_as_described: "not_as_described (the buyer says the item differs from the listing)",
+};
+
+function disputeFacts(input: DisputePromptInput): string[] {
+  const evidence = input.evidenceLines
+    .slice(0, MAX_EVIDENCE_LINES)
+    .map((line) => `    <fact>${escapeData(line, MAX_EVIDENCE_LINE_CHARS)}</fact>`);
+  return [
+    `  <dispute_reason>${REASON_TEXT[input.reason]}</dispute_reason>`,
+    `  <disputed_amount>${input.amountUsd.toFixed(2)} USD</disputed_amount>`,
+    `  <buyer_message>${escapeData(input.buyerMessage ?? "(no message)", MAX_BUYER_MESSAGE_CHARS)}</buyer_message>`,
+    itemsBlock(input.lineItemNames),
+    "  <evidence_summary>",
+    ...evidence,
+    "  </evidence_summary>",
+  ];
+}
+
+export interface DisputeAnalysisPromptInput extends DisputePromptInput {
+  baseWinProbability: number;
+  systemRecommendation: "contest" | "refund";
+  chargebackFeeUsd: number;
+  contestEffortUsd: number;
+}
+
+/** Prompt for the `dispute_analysis` tool. The model sees the system's numbers and may only nudge them. */
+export function buildDisputeAnalysisPrompt(input: DisputeAnalysisPromptInput): string {
+  return [
+    "<instructions>",
+    "You are a risk assistant for a small online merchant who has received a payment dispute. Use the dispute_analysis",
+    "tool to return your assessment.",
+    "The system has already computed a base win likelihood and a recommendation from the evidence; they are in the data.",
+    "Return llm_adjustment between -0.1 and 0.1: use 0 unless the evidence summary shows something the base figure cannot",
+    "capture. Write the reasoning for a shop owner with no technical background, at most 150 words: say whether the evidence",
+    "is strong or thin, what would help, and what you recommend. Only set override_recommendation if you recommend the",
+    "OPPOSITE of the system recommendation, and then explain why in the reasoning. In evidence_used and evidence_gaps use",
+    "short phrases taken from the evidence summary. Do not invent facts that are not in the data.",
+    UNTRUSTED_NOTICE,
+    "</instructions>",
+    "",
+    "<data>",
+    ...disputeFacts(input),
+    `  <base_win_probability>${input.baseWinProbability.toFixed(3)}</base_win_probability>`,
+    `  <system_recommendation>${input.systemRecommendation}</system_recommendation>`,
+    `  <cost_assumptions chargeback_fee_usd="${input.chargebackFeeUsd}" contest_effort_usd="${input.contestEffortUsd}" />`,
+    "</data>",
+  ].join("\n");
+}
+
+/** Prompt for the `dispute_draft_response` tool. */
+export function buildDraftResponsePrompt(input: DisputePromptInput): string {
+  return [
+    "<instructions>",
+    "You help a small online merchant answer a payment dispute. Use the dispute_draft_response tool to return a draft",
+    "response to PayPal's dispute team, written in the first person as the merchant.",
+    'Start with "Hello PayPal Dispute Team,". Keep it under 250 words, plain text, factual and polite. Cite only facts that',
+    "are in the evidence summary: the carrier, tracking number, ship date and scan history for an item_not_received dispute;",
+    "the item and what was on file for a not_as_described dispute. Do not invent facts, do not promise anything, and do not",
+    'repeat the buyer\'s message back. End with "Thank you," then "[Your name]".',
+    UNTRUSTED_NOTICE,
+    "</instructions>",
+    "",
+    "<data>",
+    ...disputeFacts(input),
+    "</data>",
+  ].join("\n");
+}

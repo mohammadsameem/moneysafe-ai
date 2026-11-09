@@ -62,7 +62,8 @@ export interface StructuredOptions<T> {
   /** Providers in order (primary first). Empty means "not configured". */
   providers: readonly LlmProvider[];
   tool: StructuredTool;
-  schema: z.ZodType<T>;
+  /** The input type is unconstrained so schemas with `.transform()` / `.default()` are accepted. */
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>;
   /** The full user message, already built with <instructions> / <data> separation. */
   prompt: string;
   /** Optional static system message. */

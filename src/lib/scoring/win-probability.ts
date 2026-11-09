@@ -57,6 +57,18 @@ export function computeBaseWinProbability(
   return total / RUBRIC_MAX_POINTS;
 }
 
+/** The LLM may nudge the base probability by at most this much in either direction (REQ-DIS-03). */
+export const LLM_ADJUSTMENT_LIMIT = 0.1;
+
+/**
+ * Clamp whatever the model returned to [-0.1, +0.1]. A non-finite value (NaN, Infinity) counts as
+ * no adjustment, so a malformed answer can never move the number.
+ */
+export function clampLlmAdjustment(raw: number): number {
+  if (!Number.isFinite(raw)) return 0;
+  return Math.min(LLM_ADJUSTMENT_LIMIT, Math.max(-LLM_ADJUSTMENT_LIMIT, raw));
+}
+
 /** final win probability = clamp(base + adjustment, 0.05, 0.95) */
 export function computeWinProbability(base: number, llmAdjustment: number): number {
   return Math.min(WIN_PROBABILITY_MAX, Math.max(WIN_PROBABILITY_MIN, base + llmAdjustment));

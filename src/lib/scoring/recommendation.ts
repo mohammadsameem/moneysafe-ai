@@ -21,6 +21,21 @@ export function contestExpectedValue(
   return winProbability * amountUsd - (1 - winProbability) * chargebackFeeUsd - contestEffortUsd;
 }
 
+export type RecommendationSource = "system" | "ai_adjusted";
+
+/**
+ * The recommendation the merchant sees (REQ-DIS-03). The system's EV rule decides; the model may
+ * override it, and only an override that DIFFERS from the system's recommendation counts. An
+ * override that agrees with the system, or no override, leaves the source as "system".
+ */
+export function resolveFinalRecommendation(
+  system: Recommendation,
+  override: Recommendation | null | undefined,
+): { recommendation: Recommendation; source: RecommendationSource; override: Recommendation | null } {
+  if (override && override !== system) return { recommendation: override, source: "ai_adjusted", override };
+  return { recommendation: system, source: "system", override: null };
+}
+
 /** "contest" only when the expected value is strictly positive; a tie goes to "refund". */
 export function computeSystemRecommendation(
   amountUsd: number,

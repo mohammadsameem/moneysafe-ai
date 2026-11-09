@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getAppBaseUrl } from "../env";
+import { getAppBaseUrl, getCostAssumptions } from "../env";
 
 describe("getAppBaseUrl", () => {
   it("returns the origin: no path, query or trailing slash", () => {
@@ -15,6 +15,32 @@ describe("getAppBaseUrl", () => {
       getAppBaseUrl({ NEXTAUTH_URL: "not-a-url-secret" });
     } catch (err) {
       expect(String(err)).not.toContain("not-a-url-secret");
+    }
+  });
+});
+
+describe("getCostAssumptions", () => {
+  it("defaults to a $20 chargeback fee and $10 contest effort", () => {
+    expect(getCostAssumptions({})).toEqual({ chargebackFeeUsd: 20, contestEffortUsd: 10 });
+    expect(getCostAssumptions({ CHARGEBACK_FEE_USD: "  ", CONTEST_EFFORT_USD: "" })).toEqual({ chargebackFeeUsd: 20, contestEffortUsd: 10 });
+  });
+
+  it("reads overrides, including zero", () => {
+    expect(getCostAssumptions({ CHARGEBACK_FEE_USD: "25.5", CONTEST_EFFORT_USD: "0" })).toEqual({ chargebackFeeUsd: 25.5, contestEffortUsd: 0 });
+  });
+
+  it("throws a message that names the variable but not the value", () => {
+    for (const bad of ["abc", "-1", "Infinity"]) {
+      const err = (() => {
+        try {
+          getCostAssumptions({ CHARGEBACK_FEE_USD: bad });
+        } catch (e) {
+          return String(e);
+        }
+        return "";
+      })();
+      expect(err).toContain("CHARGEBACK_FEE_USD");
+      expect(err).not.toContain(bad);
     }
   });
 });

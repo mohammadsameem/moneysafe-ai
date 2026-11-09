@@ -19,6 +19,7 @@ import type {
   NewSignalWeights,
 } from "../db/schema";
 import { computeInsightsFingerprint } from "../lib/insights/fingerprint";
+import { evidenceGapLabels, evidenceUsedLabels } from "../lib/evidence/labels";
 import { seedId } from "./ids";
 // The single scoring implementation. The seed computes its derived numbers with the same
 // functions the app uses, so the unit tests in src/lib/scoring cover what the seed relies on.
@@ -33,7 +34,6 @@ import {
   evaluateSignals,
   toVerdict,
   toWinLikelihoodLabel,
-  trackingStatuses,
   type ArtefactInput,
 } from "../lib/scoring";
 
@@ -434,37 +434,6 @@ const DISPUTE_SPECS: DisputeSpec[] = [
     },
   },
 ];
-
-// ---------------------------------------------------------------------------
-// Text helpers for evidence labels / gaps
-// ---------------------------------------------------------------------------
-function evidenceUsedLabels(arts: ArtefactInput[]): string[] {
-  const statuses = trackingStatuses(arts);
-  const has = (t: string) => arts.some((a) => a.artefactType === t);
-  const labels: string[] = [];
-  if (has("invoice_summary")) labels.push("Invoice / order summary");
-  if (has("line_items")) labels.push("Order line items");
-  if (has("buyer_contact")) labels.push("Buyer contact details");
-  if (has("tracking_info")) labels.push("Tracking number and carrier");
-  if (statuses.length > 0) {
-    labels.push(
-      statuses.includes("Delivered")
-        ? "Carrier scan history ending in Delivered (mocked)"
-        : "Carrier scan history, In Transit only (mocked)",
-    );
-  }
-  if (has("buyer_communication")) labels.push("Buyer communications");
-  return labels;
-}
-
-function evidenceGapLabels(arts: ArtefactInput[]): string[] {
-  const statuses = trackingStatuses(arts);
-  const gaps: string[] = [];
-  if (statuses.length === 0) gaps.push("No carrier scan events on file");
-  else if (!statuses.includes("Delivered")) gaps.push("No Delivered scan: tracking stops at In Transit");
-  if (!arts.some((a) => a.artefactType === "buyer_communication")) gaps.push("No buyer communications on file");
-  return gaps;
-}
 
 // ---------------------------------------------------------------------------
 // The bundle

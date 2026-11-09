@@ -136,6 +136,27 @@ export function getAppBaseUrl(source: Record<string, string | undefined> = proce
   return new URL(parsed.data).origin;
 }
 
+export interface CostAssumptions {
+  chargebackFeeUsd: number;
+  contestEffortUsd: number;
+}
+
+/**
+ * The fee and effort assumptions behind the contest-vs-refund rule (env only, never stored).
+ * Unset or blank gives the defaults ($20 and $10); a value that is not a non-negative number throws,
+ * naming the variable but not echoing the value.
+ */
+export function getCostAssumptions(source: Record<string, string | undefined> = process.env): CostAssumptions {
+  const read = (name: "CHARGEBACK_FEE_USD" | "CONTEST_EFFORT_USD", fallback: number): number => {
+    const raw = source[name]?.trim();
+    if (!raw) return fallback;
+    const parsed = z.coerce.number().finite().nonnegative().safeParse(raw);
+    if (!parsed.success) throw new Error(`${name} must be a non-negative number. See .env.example.`);
+    return parsed.data;
+  };
+  return { chargebackFeeUsd: read("CHARGEBACK_FEE_USD", 20), contestEffortUsd: read("CONTEST_EFFORT_USD", 10) };
+}
+
 /** True only when DEMO_MODE is exactly "true". */
 export function isDemoModeEnabled(source: Record<string, string | undefined> = process.env): boolean {
   return source.DEMO_MODE?.trim().toLowerCase() === "true";
