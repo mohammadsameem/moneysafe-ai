@@ -16,7 +16,7 @@ const ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/", available: true },
   { label: "Orders", href: "/orders", available: true },
   { label: "Disputes", href: "/disputes", available: true },
-  { label: "Insights", href: "/insights", available: false, soon: "M4" },
+  { label: "Insights", href: "/insights", available: true },
   { label: "Agent Activity", href: "/activity", available: true },
 ];
 

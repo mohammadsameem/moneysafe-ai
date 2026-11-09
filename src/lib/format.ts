@@ -37,6 +37,9 @@ export function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
+/** REQ-NFR-01: the only way scores are described. Never "trained fraud model" or "AI fraud detection". */
+export const SCORING_LABEL = "Explainable risk signals + AI reasoning";
+
 /** The note shown wherever a rule-based result stands in for an AI one. */
 export const AI_UNAVAILABLE_NOTE = "AI unavailable \u2014 showing rule-based result.";
 

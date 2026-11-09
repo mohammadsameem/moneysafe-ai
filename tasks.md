@@ -719,10 +719,20 @@ Added at checkpoint E. Built right after M3-06.
 
 ### M4-03 · Insights page UI
 
-- [ ] Signal weights table: name, current, baseline, delta (coloured ↑↓)
-- [ ] `<WeightChangeProposal>` card: proposed deltas, LLM reasoning, Approve / Reject
-- [ ] Outcome breakdown bar chart + AI summary card (fallback note when `usedFallback`)
-- [ ] Loading skeleton; empty state
+- [x] Signal weights table: name, current, baseline, delta (coloured ↑↓)
+- [x] `<WeightChangeProposal>` card: proposed deltas, LLM reasoning, Approve / Reject
+- [x] Outcome breakdown bar chart + AI summary card (fallback note when `usedFallback`)
+- [x] Loading skeleton; empty state
+
+
+> M4-03 notes (9 new tests; 795 in total):
+>
+> - **`/insights`** (`src/app/(app)/insights/page.tsx`, with `loading.tsx`): server-rendered from `loadInsights`, so opening it never calls a model (the structural test covers the page too). Top to bottom: a one-line notice that weights are shared across the demo; `<WeightChangeProposal>` when a proposal is pending; the signal-weights table; the progress line; the outcome chart; the cached summary. The sidebar link is live.
+> - **Weights table** (`weights-table.tsx`): name, current, starting weight, and the change as an arrow, a signed number and a spoken form (amber for up, blue for down, grey for none; the colour is never the only signal). It carries the REQ-NFR-01 label "Explainable risk signals + AI reasoning" (`<ScoringLabel>`, also used by M4-07 wherever scores appear).
+> - **`<WeightChangeProposal>`** (client): all six signals with now / proposed / change, the model's reasoning (with the system's "limited to 3 points" note if it applied), the Demo data badge on the seeded proposal, Approve change / Reject. It sends back the proposal it shows (`proposalCreatedAt`), refreshes the page, and shows an inline status. It says that approving applies to orders scored from now on and that weights are shared.
+> - **Outcome chart and summary:** won / lost / refunded as bars with the counts written out (no chart library), a note of how many are simulated or from the demo history, and the Demo data badge when seeded history is included. The summary card shows the cached text, the "AI unavailable" note when it is a rule-based text, and when it was written; an empty state explains what feeds the chart.
+> - **Verified live** (dev server, real Supabase, 13/13): `/insights` without a session redirects to /login; with one it renders six weights, the label, the proposal card (First-time buyer, high value 20 -> 23, +3; the seeded reasoning; Approve and Reject), 3 Demo data badges, Won 2 / Lost 1 / Refunded 2 / "5 resolved in total", the seeded summary with no note, the shared-weights notice, no "trained fraud model" wording; opening the page left the day's LLM usage counter unchanged; after approving through the API the card is gone and the table shows 23 with +3.
+> - **Not verified:** clicking Approve / Reject in a real browser (the API they call is verified in M4-02); the layout at 375 px and 1280 px (M4-07); the page with the AI-unavailable note (unit-tested through the read model).
 
 ---
 

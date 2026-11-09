@@ -219,6 +219,7 @@ describe("the GET route and the read model cannot reach a model (structural)", (
   it.each([
     ["src/app/api/insights/route.ts"],
     ["src/lib/insights/read.ts"],
+    ["src/app/(app)/insights/page.tsx"],
   ])("%s imports nothing from the AI layer, the summary refresh or the learning loop", (file) => {
     const text = read(...file.split("/"));
     expect(importsOf(text).filter((i) => FORBIDDEN.test(i)), file).toEqual([]);
