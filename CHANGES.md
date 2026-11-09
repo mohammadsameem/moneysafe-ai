@@ -6,6 +6,13 @@ Notable changes to the spec and architecture, newest first. Task-by-task progres
 ## Deviation log
 One line per deviation from the written specs, newest first.
 
+- 2026-11-08 M2-04: the action to approve is derived from the final recommendation (contest -> submit_evidence, refund -> accept_claim), not chosen by the client; a request for the other action is 409. Approving a refund takes no edited draft.
+- 2026-11-08 M2-04 / REQ-DIS-09: `accept_claim` completion marks the execution done, resolves the dispute, inserts the `dispute_outcomes` row (ON CONFLICT DO NOTHING) and bumps the counter in ONE transaction, and the counter moves only if that row was inserted. The "run learning loop check" step is an unbound `onOutcomeRecorded` hook until M4.
+- 2026-11-08 M2-05 before M2-04: built first because the M2-04 tests exercise the real executor. `submitEvidence` / `acceptClaim` keep their M1-06 signatures; the approve handler passes the approval and execution it already holds to `executeApproved` (src/lib/disputes/executor.ts) instead of the PayPal functions loading the row themselves.
+- 2026-11-08 REQ-DIS-03 / M2-02: an AI override of the recommendation is ignored when its reasoning is shorter than 20 characters; an override equal to the system's recommendation is not an override. The tool asks for llm_adjustment in -0.1..0.1; the zod schema tolerates +/-0.5 and the system clamps.
+- 2026-11-08 M2-03 / design 7.3: `analyze` does not call `paypal.getDispute` first. The deadline refresh from PayPal for a live-linked dispute happens in the read layer (M2-01); analysis needs only the local dispute and its order's evidence.
+- 2026-11-08 M2-02 / design 5.4: the dispute tool schemas also cap the evidence lists (12 items, 160 characters each); an optional override is simply not listed in `required` (no `["string","null"]` type, which Gemini's OpenAI layer may reject).
+
 - 2026-11-08 REQ-NFR-18 / M1-09b: `GET /api/orders/paypal-return` and `/paypal-cancel` redirect (302) to `/login` when there is no session, instead of 401 JSON; every other `/api/*` route is unchanged. Reason: they are browser navigations from PayPal.
 - 2026-11-08 REQ-AUTH-02 / M1-11: the login page prints the demo email and the value of `DEMO_PASSWORD` in a "Demo login" box (public by design). Anyone who can open `/login` can read it, so the demo account must hold sample data only.
 - 2026-11-08 REQ-ORD-01 / M1-07b: a created (unpaid) order stores `buyer_email = pending@paypal.invalid` because the column is NOT NULL and PayPal reveals the payer's email only at capture.

@@ -397,12 +397,12 @@
 
 ### M2-04 · Approval records + action executions
 
-- [ ] `src/lib/disputes/approval.ts` — one function, `resolveApprovalState(disputeId, actionType)`, returns a discriminated union:
+- [x] `src/lib/disputes/approval.ts` — one function, `resolveApprovalState(disputeId, actionType)`, returns a discriminated union:
   - `{ kind: 'already_executed', execution }` — an approved record exists and its `action_executions.executed_at IS NOT NULL`
   - `{ kind: 'retry', approval, execution }` — an approved record exists with an **unexecuted** `action_executions` row
   - `{ kind: 'first' }` — no approved record
   - plus `createApprovalWithExecution(input)` (single transaction: insert approval + execution with fresh `paypal_request_id`)
-- [ ] `POST /api/disputes/[id]/approve` branches on `resolveApprovalState`:
+- [x] `POST /api/disputes/[id]/approve` branches on `resolveApprovalState`:
   - **`already_executed`** → return "Action already executed"; **insert nothing**
   - **`retry`** → reuse the existing execution and its **same `PayPal-Request-Id`**; **insert nothing** (no new approval row, no new execution row); go straight to the execute step
   - **`first`** → `createApprovalWithExecution` (partial unique index still guards concurrent first approvals; a unique-violation is re-read and routed to `retry`/`already_executed`)
@@ -410,14 +410,26 @@
   - Simulate: `is_simulated = true`, `executed_at = now()`; Live: call PayPal → on fail: return error, leave `executed_at` null (the next click lands in the `retry` branch)
   - **If `action_type = 'accept_claim'` and execution succeeded (or simulated):** automatically set `disputes.outcome = 'refunded'`, `status = 'resolved_refunded'`; insert `dispute_outcomes`; increment `resolved_since_last_proposal`; run learning loop check
   - Log `merchant_action` and `paypal_api` (or `simulated`)
-- [ ] `POST /api/disputes/[id]/reject`: insert rejection record; log
-- [ ] Tests (`src/lib/disputes/__tests__/approve-branching.test.ts`, mocked DB + mocked PayPal):
+- [x] `POST /api/disputes/[id]/reject`: insert rejection record; log
+- [x] Tests (`src/lib/disputes/__tests__/approve-branching.test.ts`, mocked DB + mocked PayPal):
   - **first**: no records → inserts exactly 1 approval + 1 execution; PayPal called once with the new `paypal_request_id`
   - **retry path**: approved record + unexecuted execution (previous PayPal call failed) → **inserts 0 rows**; PayPal called once with the **same `paypal_request_id`** as the stored row; on success `executed_at` is set
   - **retry then fail again** → still 0 inserts; `executed_at` stays null; same request id
   - **already_executed**: executed row → 0 inserts, PayPal **not** called, returns the already-executed result
   - **concurrent first approval** (unique violation on insert) → resolves to `retry` or `already_executed`, never a second execution row
   - **accept_claim success** → exactly one `dispute_outcomes` row (`refunded`) and one counter increment; the retry branch does not double-increment
+
+
+> M2-04 notes (34 new tests in `approve-branching.test.ts`; 565 in total):
+>
+> - **`src/lib/disputes/approval.ts`**: `resolveApprovalState(repo, disputeId, actionType)` returns `already_executed` / `retry` / `first`, and `createApprovalWithExecution` inserts the approval and its execution in ONE transaction with a fresh `paypal_request_id`. An approval with no execution row fails loudly (data integrity) instead of creating a second approval.
+> - **`src/lib/disputes/approve.ts`** (`approveDispute`, `rejectDispute`) and the routes `POST /api/disputes/[id]/approve` and `.../reject`. `already_executed` -> 200 "Action already executed", inserts nothing, sends nothing. `retry` -> reuses the stored execution and request id, inserts nothing, sends the STORED payload (a different draft in the retry request is ignored). `first` -> stores approval + execution, then executes. A unique violation on insert (concurrent first approval) is re-read and routed to `retry` or `already_executed`; a second execution row is never created. A live failure returns 502 `{ status: "execution_failed", retryable: true, message }` and leaves `executed_at` null.
+> - **The action is derived from the recommendation, not chosen by the client:** contest -> `submit_evidence`, refund -> `accept_claim`. A request for the other action is 409 `wrong_action`. A dispute that is not open, not analysed, or has no usable draft/tracking is refused BEFORE anything is stored. An "edit" equal to the original (or blank) is not recorded as an edit; original and edited drafts are both stored. The payload hash is the SHA-256 of a key-sorted JSON of the action and payload.
+> - **Reject** records a rejection (no execution, nothing sent, dispute stays open). Rejections are unconstrained and do not block a later approval; an already-approved action reports 409 `already_approved`.
+> - **Learning loop:** `accept_claim` increments `resolved_since_last_proposal` (once, via the outcome row); the "run learning loop check" is M4 and is a hook (`onOutcomeRecorded`) that is not bound yet.
+> - **Test list (all pass):** the six required cases (first; retry path; retry then fail again; already_executed; concurrent first approval resolving to retry or already_executed; accept_claim with one outcome row and one counter increment, no double increment on retry), plus simultaneous approvals, simulation on seeded/demo disputes and `DEMO_MODE`, edits/payload/hash, eight refusal cases that insert nothing and send nothing, reject, the state resolver, and the activity log.
+> - **Verified live** (dev server, real Supabase, signed in, temporary demo disputes, all rows removed and the shared counter restored; `db:seed:verify` passes afterwards): 401 without a session; 400 for non-JSON, an unknown action, extra fields and a 2001-character edit; 404 for an unknown dispute and for another session's; 409 for the wrong action, with nothing stored; reject then approve with an edit: the execution row has `executed_at`, `is_simulated`, the original and edited drafts, a `PROOF_OF_FULFILLMENT` payload with the real tracking number and the EDITED notes, an approval row by `demo-merchant` with a 64-hex SHA-256, and a UUID request id; approving again is \"Action already executed\" with nothing inserted; rejecting after approval is 409; **five simultaneous approvals of a refund: all 200, one `executed` and four `already_executed`, exactly one approved record, one execution row, one `dispute_outcomes` row, counter +1**, and a sixth later approval does not move the counter; the activity log has the reject, approve and simulated `submit_evidence` rows with no draft text, tracking number or request id.
+> - **Not verified:** the live-failure retry against a real PayPal outage (covered by the fake-PayPal tests and by the repo tests against the real database, but no real PayPal write has ever been sent); and the approve UI, which is M2-07.
 
 ---
 
