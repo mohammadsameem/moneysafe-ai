@@ -10,6 +10,8 @@ export { isDemoMode, shouldSimulateWrite, withDemoFallback } from "./demo";
 export type { DemoFallbackOptions, DemoReason, DemoResult } from "./demo";
 export { requireApproval } from "./approval-gate";
 export type { ApprovalLookup, ApprovalRecordLite, DisputeActionType } from "./approval-gate";
+export { getDispute, listDisputes } from "./disputes-read";
+export type { ListDisputesOptions, PayPalDispute } from "./disputes-read";
 export { acceptClaim, submitEvidence } from "./disputes";
 export type { AcceptClaimPayload, DisputeWriteDeps, PayPalDisputeWrite, ProvideEvidencePayload } from "./disputes";
 

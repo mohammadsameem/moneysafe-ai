@@ -11,7 +11,7 @@ export const TokenResponseSchema = z.object({
   token_type: z.string().optional(),
 });
 
-const Money = z.object({ currency_code: z.string(), value: z.string() });
+export const Money = z.object({ currency_code: z.string(), value: z.string() });
 
 export const LinkSchema = z.object({ href: z.string().url(), rel: z.string(), method: z.string().optional() });
 
@@ -72,3 +72,26 @@ export const PayPalErrorBodySchema = z.object({
   message: z.string().optional(),
   debug_id: z.string().optional(),
 });
+
+// ---------------------------------------------------------------------------
+// Disputes (customer disputes API). Only the fields the app reads; PayPal adding fields is fine.
+// ---------------------------------------------------------------------------
+export const PayPalDisputeSchema = z.object({
+  dispute_id: z.string().min(1),
+  status: z.string(),
+  reason: z.string().optional(),
+  dispute_state: z.string().optional(),
+  dispute_life_cycle_stage: z.string().optional(),
+  dispute_amount: Money.optional(),
+  /** ISO-8601; when the seller must respond by. */
+  seller_response_due_date: z.string().optional(),
+  create_time: z.string().optional(),
+  update_time: z.string().optional(),
+});
+
+export const ListDisputesResponseSchema = z.object({
+  items: z.array(PayPalDisputeSchema).default([]),
+});
+
+/** Provide-evidence and accept-claim answer with the dispute (or a link list); we keep what is there. */
+export const DisputeWriteResponseSchema = z.object({}).passthrough();

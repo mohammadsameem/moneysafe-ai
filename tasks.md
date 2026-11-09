@@ -328,8 +328,20 @@
 
 ### M2-01 · PayPal service layer — disputes (read)
 
-- [ ] `listDisputes()`: `GET /v1/customer/disputes` with Demo Mode fallback + zod validation
-- [ ] `getDispute(id)`: `GET /v1/customer/disputes/{id}` with Demo Mode fallback + zod validation
+- [x] `listDisputes()`: `GET /v1/customer/disputes` with Demo Mode fallback + zod validation
+- [x] `getDispute(id)`: `GET /v1/customer/disputes/{id}` with Demo Mode fallback + zod validation
+
+
+> M2-01 notes (28 new tests; 398 in total):
+>
+> - **`src/lib/paypal/disputes-read.ts`**: `listDisputes(client, {pageSize, disputeState})` (page size clamped to 1-50) and `getDispute(client, id)` (id URL-encoded), both zod-validated; an item without a `dispute_id` is rejected, not trusted. Both are re-exported from `src/lib/paypal`.
+> - **`src/lib/disputes/`**: `deadline.ts` (`computeDeadline`, `formatCountdown`), `read.ts` (`listDisputeViews`, `getDisputeView`, `toDisputeView`), `repo.ts` (Drizzle read repo), `types.ts`. The local `disputes` table is the system of record (like orders); PayPal is consulted only for a dispute that has a `paypal_dispute_id` and is not seeded or demo.
+> - **Deadline offsets are computed at read time:** an open seed dispute shows `now + deadline_offset_hours` on every read (the stored `2099-01-01` placeholder is never shown). Non-seed disputes keep their stored deadline. An offset of 0 means now.
+> - **Countdown rule (REQ-DIS-02):** red/urgent when less than 48 hours remain; exactly 48 h is not urgent; overdue and unparseable dates are urgent.
+> - **Open vs Resolved (REQ-DIS-01):** a dispute is on exactly one tab. `action_taken` (evidence sent, awaiting PayPal) is not resolved, so it stays on Open. Open sorts by deadline ascending; Resolved by resolved date descending (`updated_at`).
+> - **Fallback (REQ-DEMO-01):** for a live-linked dispute the deadline comes from PayPal's `seller_response_due_date`; if PayPal fails, there are no credentials, or `DEMO_MODE=true`, the stored record is used and a `simulated` `paypal_api` event is logged. A non-PayPal error (a bug) is rethrown, not hidden.
+> - **Verified against the live database:** a fresh session sees exactly 3 open and 5 resolved seeded disputes; open deadlines are 40, 48 and 72 hours away (SEED-E, SEED-D, SEED-C) and every open seed already has a stored analysis; resolved outcomes are 2 won, 1 lost, 2 refunded.
+> - **Not verified:** the PayPal list/get calls against the real sandbox (the sandbox cannot be given a dispute from this app; tested with a mocked `fetch` only), and the `seller_response_due_date` field name against a real response.
 
 ---
 
