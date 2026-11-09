@@ -23,6 +23,12 @@ function createSql(): postgres.Sql {
   const raw = getDatabaseUrl();
   return postgres(normalizeDatabaseUrl(raw), {
     prepare: false, // required by the Supabase transaction pooler
+    // One query in flight per connection. postgres.js pipelines by default, and through the
+    // Supavisor transaction pooler a pipelined query hangs (the server never receives its Sync and
+    // holds the transaction open until statement_timeout), even on unrelated rows. Measured: 2
+    // concurrent queries on one connection hang; with max_pipeline: 1 a query waits for a free
+    // connection instead and 20 concurrent same-row updates finish in under a second.
+    max_pipeline: 1,
     ssl: isLocalDatabaseUrl(raw) ? false : "require",
     max: process.env.VERCEL ? 1 : 5, // one connection per serverless instance
     idle_timeout: 20,

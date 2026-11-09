@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import type { ActionExecution, Dispute } from "@/db/schema";
 import type { ActivityMeta } from "@/lib/activity/logger";
 import { ACCEPT_CLAIM_NOTE, EVIDENCE_NOTES_MAX_CHARS, buildProvideEvidencePayload } from "@/lib/paypal/evidence-payload";
+import { isAnalysed } from "./analysis-state";
 import { createApprovalWithExecution, resolveApprovalState, type ApprovalState } from "./approval";
 import { executeApproved, type ExecutorDeps } from "./executor";
 import { toDisputeView, type DisputeView } from "./read";
@@ -85,7 +86,7 @@ export async function approveDispute(req: ApproveRequest, deps: ApproveDeps): Pr
   const { dispute, order } = record;
 
   const expected = expectedAction(dispute.finalRecommendation);
-  if (dispute.analysisComputedAt === null || expected === null) return { kind: "not_analyzed" };
+  if (!isAnalysed(dispute.analysisComputedAt) || expected === null) return { kind: "not_analyzed" };
   if (req.action !== expected) return { kind: "wrong_action", expected };
 
   const started = Date.now();
@@ -209,7 +210,7 @@ export async function rejectDispute(req: ActionRequest, deps: Pick<ApproveDeps, 
   const { dispute, order } = record;
 
   const expected = expectedAction(dispute.finalRecommendation);
-  if (dispute.analysisComputedAt === null || expected === null) return { kind: "not_analyzed" };
+  if (!isAnalysed(dispute.analysisComputedAt) || expected === null) return { kind: "not_analyzed" };
   if (req.action !== expected) return { kind: "wrong_action", expected };
   // Checked before the status: once an action is approved the dispute is no longer open, and
   // "already approved" tells the merchant more than "not open".

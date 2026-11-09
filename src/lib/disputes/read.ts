@@ -9,6 +9,7 @@
 import type { Dispute, Order } from "@/db/schema";
 import type { ActivityMeta } from "@/lib/activity/logger";
 import { getDispute, withDemoFallback, type PayPalClient } from "@/lib/paypal";
+import { isAnalysed } from "./analysis-state";
 import { computeDeadline } from "./deadline";
 import type { DisputeRecord, DisputesReadRepo } from "./types";
 
@@ -60,7 +61,8 @@ export interface DisputeView {
 }
 
 export function toAnalysisView(d: Dispute): DisputeAnalysisView | null {
-  if (d.analysisComputedAt === null) return null;
+  // A claim ("pending:...") means an analysis is being computed: it is not an analysis yet.
+  if (!isAnalysed(d.analysisComputedAt)) return null;
   return {
     baseWinProbability: d.baseWinProbability,
     llmAdjustment: d.llmAdjustment,

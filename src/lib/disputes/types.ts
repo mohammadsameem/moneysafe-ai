@@ -38,10 +38,18 @@ export interface AnalysisPatch {
 
 export interface DisputesAnalysisRepo extends DisputesReadRepo {
   /**
-   * Save an analysis only while the dispute has none (`analysis_computed_at IS NULL`). Returns the
-   * updated row, or null when another request saved first (the caller then reads that one).
+   * Atomically CLAIM the dispute for analysis: write `token` into `analysis_computed_at` only if it
+   * is null, or holds a claim older than `staleBeforeIso`. Returns true for exactly one caller.
    */
-  saveAnalysis(id: string, patch: AnalysisPatch): Promise<Dispute | null>;
+  claimAnalysis(id: string, token: string, staleBeforeIso: string): Promise<boolean>;
+  /**
+   * Replace the claim with the finished analysis (`patch.analysisComputedAt` is the real
+   * timestamp). Only succeeds while `token` is still the stored claim; returns the updated row, or
+   * null if the claim was lost (taken over as stale).
+   */
+  saveAnalysis(id: string, patch: AnalysisPatch, token: string): Promise<Dispute | null>;
+  /** Give the claim back (set it to null) if `token` is still the stored claim. */
+  releaseAnalysisClaim(id: string, token: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

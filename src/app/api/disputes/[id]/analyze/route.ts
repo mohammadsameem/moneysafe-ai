@@ -22,6 +22,9 @@ export async function POST(_request: Request, { params }: { params: { id: string
   switch (outcome.kind) {
     case "not_found":
       return NextResponse.json({ error: "not_found" }, { status: 404 });
+    case "in_progress":
+      // Another request is analysing this dispute. 202 + Retry-After: ask again; nothing was spent here.
+      return NextResponse.json({ status: "in_progress" }, { status: 202, headers: { "Retry-After": "2" } });
     case "cached":
       return NextResponse.json({ status: "cached", dispute: outcome.view });
     case "analyzed":

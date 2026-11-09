@@ -15,14 +15,14 @@ describe.skipIf(!process.env.DATABASE_URL)("disputes repo against the live datab
   const created: string[] = [];
   let counterBefore = 0;
 
-  const newDispute = async (): Promise<string> => {
+  const newDispute = async (analysed = true): Promise<string> => {
     const { getSql } = await import("@/db/client");
     const id = randomUUID();
     created.push(id);
     const now = new Date().toISOString();
     await getSql()`
       INSERT INTO disputes (id, order_id, reason, disputed_amount_usd, deadline_at, status, session_id, is_seed, is_demo, created_at, updated_at, analysis_computed_at)
-      VALUES (${id}, ${seedId("order", "SEED-A")}, 'item_not_received', 145, ${now}, 'open', 'repo-live-test', false, true, ${now}, ${now}, ${now})`;
+      VALUES (${id}, ${seedId("order", "SEED-A")}, 'item_not_received', 145, ${now}, 'open', 'repo-live-test', false, true, ${now}, ${now}, ${analysed ? now : null})`;
     return id;
   };
   const input = (disputeId: string, actionType: "submit_evidence" | "accept_claim" = "submit_evidence"): NewApprovalWithExecution => ({
@@ -195,4 +195,88 @@ describe.skipIf(!process.env.DATABASE_URL)("disputes repo against the live datab
     expect((await repo.findApprovalById(approval.id))?.id).toBe(approval.id);
     expect((await repo.getExecutionByApproval(approval.id))?.id).toBe(execution.id);
   });
+  describe("analysis claim (the in-flight guard)", () => {
+    const PATCH = {
+      baseWinProbability: 1, llmAdjustment: 0, winProbability: 0.95, winLikelihoodLabel: "Strong" as const, systemRecommendation: "contest" as const,
+      overrideRecommendation: null, finalRecommendation: "contest" as const, recommendationSource: "system" as const, reasoning: "live claim test",
+      evidenceUsed: [], evidenceGaps: [], draftResponse: null, analysisComputedAt: "2026-11-08T12:00:00.000Z", riskScoreSnapshot: 0,
+    };
+    const PAST = "1970-01-01T00:00:00.000Z";
+    const FUTURE = "2999-01-01T00:00:00.000Z";
+    const marker = async (id: string) => {
+      const { getSql } = await import("@/db/client");
+      return (await getSql()<{ m: string | null }[]>`SELECT analysis_computed_at AS m FROM disputes WHERE id = ${id}`)[0]!.m;
+    };
+
+    it("of 8 simultaneous claims exactly ONE wins, and the marker holds the winner's token", async () => {
+      const { createDrizzleDisputesRepo } = await import("../repo");
+      const repo = createDrizzleDisputesRepo();
+      const id = await newDispute(false);
+      const tokens = Array.from({ length: 8 }, (_, i) => `pending:${new Date().toISOString()}|racer-${i}`);
+
+      const results = await Promise.all(tokens.map((token) => repo.claimAnalysis(id, token, PAST)));
+
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(tokens).toContain(await marker(id));
+      expect(tokens[results.indexOf(true)]).toBe(await marker(id));
+    });
+
+    it("a fresh claim blocks others; an old one (or one with no valid time) can be taken over", async () => {
+      const { createDrizzleDisputesRepo } = await import("../repo");
+      const repo = createDrizzleDisputesRepo();
+      const id = await newDispute(false);
+      const first = `pending:${new Date().toISOString()}|first`;
+      expect(await repo.claimAnalysis(id, first, PAST)).toBe(true);
+      expect(await repo.claimAnalysis(id, `pending:${new Date().toISOString()}|second`, PAST)).toBe(false); // fresh: blocked
+      expect(await marker(id)).toBe(first);
+
+      const taken = `pending:${new Date().toISOString()}|third`;
+      expect(await repo.claimAnalysis(id, taken, FUTURE)).toBe(true); // "older than the cutoff": stale
+      expect(await marker(id)).toBe(taken);
+
+      const { getSql } = await import("@/db/client");
+      await getSql()`UPDATE disputes SET analysis_computed_at = 'pending:garbage' WHERE id = ${id}`;
+      expect(await repo.claimAnalysis(id, `pending:${new Date().toISOString()}|fourth`, PAST)).toBe(true); // corrupt claim: taken over even with an old cutoff
+    });
+
+    it("a finished analysis can never be claimed, even with the most generous stale cutoff", async () => {
+      const { createDrizzleDisputesRepo } = await import("../repo");
+      const repo = createDrizzleDisputesRepo();
+      const id = await newDispute(true);
+      const before = await marker(id);
+      expect(await repo.claimAnalysis(id, `pending:${new Date().toISOString()}|x`, FUTURE)).toBe(false);
+      expect(await marker(id)).toBe(before);
+    });
+
+    it("saving needs the current token: a wrong token changes nothing, the right one completes it once", async () => {
+      const { createDrizzleDisputesRepo } = await import("../repo");
+      const repo = createDrizzleDisputesRepo();
+      const id = await newDispute(false);
+      const token = `pending:${new Date().toISOString()}|mine`;
+      await repo.claimAnalysis(id, token, PAST);
+
+      expect(await repo.saveAnalysis(id, PATCH, `pending:${new Date().toISOString()}|someone-else`)).toBeNull();
+      expect(await marker(id)).toBe(token);
+
+      const saved = await repo.saveAnalysis(id, PATCH, token);
+      expect(saved).toMatchObject({ reasoning: "live claim test", analysisComputedAt: PATCH.analysisComputedAt, winLikelihoodLabel: "Strong" });
+      expect(await marker(id)).toBe(PATCH.analysisComputedAt); // the claim was replaced by the real timestamp
+      expect(await repo.saveAnalysis(id, { ...PATCH, reasoning: "overwrite" }, token)).toBeNull(); // cannot be saved twice
+    });
+
+    it("release gives the claim back only to its owner", async () => {
+      const { createDrizzleDisputesRepo } = await import("../repo");
+      const repo = createDrizzleDisputesRepo();
+      const id = await newDispute(false);
+      const token = `pending:${new Date().toISOString()}|owner`;
+      await repo.claimAnalysis(id, token, PAST);
+
+      await repo.releaseAnalysisClaim(id, `pending:${new Date().toISOString()}|not-the-owner`);
+      expect(await marker(id)).toBe(token);
+      await repo.releaseAnalysisClaim(id, token);
+      expect(await marker(id)).toBeNull();
+      expect(await repo.claimAnalysis(id, `pending:${new Date().toISOString()}|next`, PAST)).toBe(true);
+    });
+  });
+
 });

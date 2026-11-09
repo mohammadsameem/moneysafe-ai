@@ -2,7 +2,7 @@
  * Drizzle implementation of the disputes stores. Thin on purpose: every rule lives in the service
  * modules, which are tested against an in-memory fake with the same semantics.
  */
-import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
 import { getDb, type Db } from "@/db/client";
 import { errorCode } from "@/lib/activity/logger";
 import {
@@ -15,6 +15,7 @@ import {
   signalWeights,
 } from "@/db/schema";
 import { isUuid } from "@/lib/orders/queries";
+import { CLAIM_PREFIX, CLAIM_TIME_LENGTH, CLAIM_TIME_START } from "./analysis-state";
 import {
   ApprovalConflictError,
   type AnalysisPatch,
@@ -44,13 +45,42 @@ export function createDrizzleDisputesRepo(db: Db = getDb()): DisputesRepo {
     getArtefacts: (orderId) => db.select().from(evidenceArtefacts).where(eq(evidenceArtefacts.orderId, orderId)),
 
     // ---- analysis ------------------------------------------------------------
-    async saveAnalysis(id, patch: AnalysisPatch) {
+    async claimAnalysis(id, token, staleBeforeIso) {
+      // One statement, so exactly one concurrent caller can win it.
+      const rows = await db
+        .update(disputes)
+        .set({ analysisComputedAt: token })
+        .where(
+          and(
+            eq(disputes.id, id),
+            or(
+              isNull(disputes.analysisComputedAt),
+              and(
+                like(disputes.analysisComputedAt, `${CLAIM_PREFIX}%`),
+                or(
+                  lt(sql`substr(${disputes.analysisComputedAt}, ${CLAIM_TIME_START}, ${CLAIM_TIME_LENGTH})`, staleBeforeIso),
+                  // A claim whose time is not a timestamp can never be completed or compared: take it over.
+                  sql`substr(${disputes.analysisComputedAt}, ${CLAIM_TIME_START}, ${CLAIM_TIME_LENGTH}) !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'`,
+                ),
+              ),
+            ),
+          ),
+        )
+        .returning({ id: disputes.id });
+      return rows.length > 0;
+    },
+
+    async saveAnalysis(id, patch: AnalysisPatch, token) {
       const rows = await db
         .update(disputes)
         .set(patch)
-        .where(and(eq(disputes.id, id), isNull(disputes.analysisComputedAt)))
+        .where(and(eq(disputes.id, id), eq(disputes.analysisComputedAt, token)))
         .returning();
       return rows[0] ?? null;
+    },
+
+    async releaseAnalysisClaim(id, token) {
+      await db.update(disputes).set({ analysisComputedAt: null }).where(and(eq(disputes.id, id), eq(disputes.analysisComputedAt, token)));
     },
 
     // ---- approvals and executions -----------------------------------------------

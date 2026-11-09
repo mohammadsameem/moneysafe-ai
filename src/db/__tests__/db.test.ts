@@ -95,4 +95,14 @@ describe.skipIf(!process.env.DATABASE_URL)("live database", () => {
     const [row] = await getSql()<{ ok: number }[]>`SELECT 1 AS ok`;
     expect(row?.ok).toBe(1);
   });
+
+  it("many more concurrent queries than pool connections all complete (no pipelining through the pooler)", async () => {
+    // Regression: with postgres.js' default pipelining, queries queued on a busy connection hung
+    // through the Supavisor transaction pooler until statement_timeout.
+    const { getSql } = await import("../client");
+    const started = Date.now();
+    const rows = await Promise.all(Array.from({ length: 16 }, (_, i) => getSql()<{ n: number }[]>`SELECT ${i}::int AS n, pg_sleep(0.05)`));
+    expect(rows.map((r) => r[0]?.n)).toEqual(Array.from({ length: 16 }, (_, i) => i));
+    expect(Date.now() - started).toBeLessThan(20_000);
+  });
 });

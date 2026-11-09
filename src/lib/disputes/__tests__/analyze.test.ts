@@ -244,3 +244,189 @@ describe("analyzeDispute: activity log", () => {
     expect(repo.saves).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// In-flight guard (fix 3): simultaneous requests spend one analysis, not several
+// ---------------------------------------------------------------------------
+describe("analyzeDispute: in-flight guard", () => {
+  /** Model answers for one full analysis (analysis + draft), repeated if asked for more. */
+  const answerOnce = (fetchImpl: ReturnType<typeof setup>["fetchImpl"]) =>
+    fetchImpl.mockResolvedValueOnce(toolCallResponse(GOOD, "dispute_analysis")).mockResolvedValueOnce(toolCallResponse({ response_text: DRAFT }, "dispute_draft_response"));
+  const quick = { sleep: () => new Promise<void>((r) => setTimeout(r, 2)), pollMs: 2 };
+
+  it("two simultaneous requests: ONE analysis is paid for, the loser returns the winner's saved result", async () => {
+    const { repo, llm, fetchImpl, deps } = setup();
+    answerOnce(fetchImpl);
+
+    const [a, b] = await Promise.all([analyzeDispute(DISPUTE_ID, SESSION, { ...deps, ...quick }), analyzeDispute(DISPUTE_ID, SESSION, { ...deps, ...quick })]);
+
+    expect([a.kind, b.kind].sort()).toEqual(["analyzed", "cached"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2); // exactly one analysis + one draft; the loser made no model call
+    expect(llm.checkBudget).toHaveBeenCalledTimes(2); // budget units: the same as a single request
+    expect(repo.claimsWon).toBe(1);
+    expect(repo.saves).toHaveLength(1);
+    const reasoning = (o: typeof a) => (o.kind === "analyzed" || o.kind === "cached" ? o.view.analysis?.reasoning : null);
+    expect(reasoning(a)).toBe(GOOD.reasoning);
+    expect(reasoning(b)).toBe(GOOD.reasoning);
+  });
+
+  it("five simultaneous requests: one analysed, four cached, one analysis' worth of model calls", async () => {
+    const { repo, llm, fetchImpl, deps } = setup();
+    answerOnce(fetchImpl);
+
+    const results = await Promise.all(Array.from({ length: 5 }, () => analyzeDispute(DISPUTE_ID, SESSION, { ...deps, ...quick })));
+
+    expect(results.filter((r) => r.kind === "analyzed")).toHaveLength(1);
+    expect(results.filter((r) => r.kind === "cached")).toHaveLength(4);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(llm.checkBudget).toHaveBeenCalledTimes(2);
+    expect(repo.claimsWon).toBe(1);
+  });
+
+  it("the budget used by N simultaneous requests equals the budget used by one request", async () => {
+    const one = setup();
+    answerOnce(one.fetchImpl);
+    await analyzeDispute(DISPUTE_ID, SESSION, { ...one.deps, ...quick });
+
+    const many = setup();
+    answerOnce(many.fetchImpl);
+    await Promise.all(Array.from({ length: 8 }, () => analyzeDispute(DISPUTE_ID, SESSION, { ...many.deps, ...quick })));
+
+    expect(many.llm.checkBudget.mock.calls.length).toBe(one.llm.checkBudget.mock.calls.length);
+    expect(many.fetchImpl.mock.calls.length).toBe(one.fetchImpl.mock.calls.length);
+  });
+
+  it("while the winner is working the dispute shows NO analysis (a claim is not an analysis)", async () => {
+    const { repo, fetchImpl, deps } = setup();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    fetchImpl.mockImplementationOnce(async () => { await gate; return toolCallResponse(GOOD, "dispute_analysis"); }).mockResolvedValueOnce(toolCallResponse({ response_text: DRAFT }, "dispute_draft_response"));
+
+    const winner = analyzeDispute(DISPUTE_ID, SESSION, { ...deps, ...quick });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const mid = await repo.findVisible(DISPUTE_ID, SESSION);
+    expect(mid?.dispute.analysisComputedAt).toMatch(/^pending:\d{4}-\d{2}-\d{2}T[\d:.]+Z\|/);
+    const { toDisputeView } = await import("../read");
+    expect(toDisputeView(mid!, NOW).analysis).toBeNull();
+
+    release();
+    expect((await winner).kind).toBe("analyzed");
+    const done = await repo.findVisible(DISPUTE_ID, SESSION);
+    expect(done?.dispute.analysisComputedAt).toBe(NOW.toISOString()); // the claim was replaced by the real timestamp
+  });
+
+  it("if the winner fails it releases the claim, and a waiting request takes over and finishes the job", async () => {
+    const { repo, fetchImpl, deps } = setup();
+    let first = true;
+    const original = repo.getArtefacts.bind(repo);
+    repo.getArtefacts = async (orderId) => {
+      if (first) { first = false; throw new Error("database hiccup"); }
+      return original(orderId);
+    };
+    answerOnce(fetchImpl);
+
+    const [a, b] = await Promise.allSettled([analyzeDispute(DISPUTE_ID, SESSION, { ...deps, ...quick }), analyzeDispute(DISPUTE_ID, SESSION, { ...deps, ...quick })]);
+
+    expect([a.status, b.status].sort()).toEqual(["fulfilled", "rejected"]);
+    const ok = [a, b].find((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof analyzeDispute>>> => r.status === "fulfilled")!;
+    expect(ok.value.kind).toBe("analyzed");
+    expect(repo.releases).toBe(1);
+    expect(repo.claimsWon).toBe(2); // the failed winner, then the request that took over
+    expect(fetchImpl).toHaveBeenCalledTimes(2); // still only one analysis' worth of model calls
+    expect(repo.records[0]?.dispute.analysisComputedAt).toBe(NOW.toISOString());
+  });
+
+  it("a failed analysis leaves no claim behind", async () => {
+    const { repo, deps } = setup();
+    repo.getArtefacts = async () => { throw new Error("boom"); };
+    await expect(analyzeDispute(DISPUTE_ID, SESSION, deps)).rejects.toThrow("boom");
+    expect(repo.records[0]?.dispute.analysisComputedAt).toBeNull();
+  });
+
+  it("a claim older than 90 s is treated as abandoned and taken over", async () => {
+    const stale = `pending:${new Date(NOW.getTime() - 91_000).toISOString()}|dead-request`;
+    const { repo, fetchImpl, deps } = setup({ dispute: { analysisComputedAt: stale } });
+    answerOnce(fetchImpl);
+
+    const out = await analyzeDispute(DISPUTE_ID, SESSION, deps);
+
+    expect(out.kind).toBe("analyzed");
+    expect(repo.claimsWon).toBe(1);
+    expect(repo.records[0]?.dispute.analysisComputedAt).toBe(NOW.toISOString());
+  });
+
+  it("a fresh claim that never finishes: the waiting request makes no model call and answers 'in progress'", async () => {
+    const fresh = `pending:${new Date(NOW.getTime() - 5_000).toISOString()}|slow-request`;
+    const { repo, llm, fetchImpl, deps } = setup({ dispute: { analysisComputedAt: fresh } });
+    let t = NOW.getTime();
+    const waited: number[] = [];
+
+    const out = await analyzeDispute(DISPUTE_ID, SESSION, {
+      ...deps,
+      now: () => new Date(t),
+      sleep: async (ms) => { waited.push(ms); t += ms; },
+      waitForWinnerMs: 3_000,
+      pollMs: 750,
+    });
+
+    expect(out).toEqual({ kind: "in_progress" });
+    expect(waited.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(3_000);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(llm.checkBudget).not.toHaveBeenCalled();
+    expect(repo.claimsWon).toBe(0);
+    expect(repo.records[0]?.dispute.analysisComputedAt).toBe(fresh); // the other request's claim is untouched
+  });
+
+  it("an unparseable claim can never be completed, so it is taken over", async () => {
+    const { repo, fetchImpl, deps } = setup({ dispute: { analysisComputedAt: "pending:garbage" } });
+    answerOnce(fetchImpl);
+    expect((await analyzeDispute(DISPUTE_ID, SESSION, deps)).kind).toBe("analyzed");
+    expect(repo.claimsWon).toBe(1);
+  });
+
+  it("a claim only guards its own dispute", async () => {
+    const other = makeRecord(makeDispute({ id: "other-dispute", orderId: ORDER_ID, analysisComputedAt: `pending:${NOW.toISOString()}|someone` }));
+    const mine = makeRecord(makeDispute({ disputedAmountUsd: 145 }), { riskScore: 12 });
+    const repo = createFakeAnalysisRepo([other, mine], artefactRows(ORDER_ID, SEED_C));
+    const fetchImpl = mockFetch();
+    answerOnce(fetchImpl);
+    const llm = { isConfigured: () => true, checkBudget: async () => ({ allowed: true }), logActivity: async () => undefined };
+
+    const out = await analyzeDispute(DISPUTE_ID, SESSION, { repo, explainer: { llm, getProviders: () => [GEMINI], fetchImpl }, costs: COSTS, now: () => NOW });
+    expect(out.kind).toBe("analyzed");
+  });
+});
+
+describe("analysis claim helpers", () => {
+  it("tell a claim from a finished analysis", async () => {
+    const { isAnalysed, isClaim, newClaimToken, claimTakenAt, isStaleClaim, CLAIM_STALE_MS } = await import("../analysis-state");
+    const token = newClaimToken(NOW, "abc");
+    expect(token).toBe(`pending:${NOW.toISOString()}|abc`);
+    expect(isClaim(token)).toBe(true);
+    expect(isAnalysed(token)).toBe(false);
+    expect(isAnalysed(null)).toBe(false);
+    expect(isAnalysed("")).toBe(false);
+    expect(isAnalysed(NOW.toISOString())).toBe(true);
+    expect(claimTakenAt(token)?.toISOString()).toBe(NOW.toISOString());
+    expect(claimTakenAt(NOW.toISOString())).toBeNull();
+    expect(CLAIM_STALE_MS).toBeGreaterThan(60_000); // longer than any function may run
+    expect(isStaleClaim(token, new Date(NOW.getTime() + CLAIM_STALE_MS))).toBe(false);
+    expect(isStaleClaim(token, new Date(NOW.getTime() + CLAIM_STALE_MS + 1))).toBe(true);
+    expect(isStaleClaim("pending:nonsense", NOW)).toBe(true);
+    expect(isStaleClaim(NOW.toISOString(), new Date(NOW.getTime() + 1e9))).toBe(false); // an analysis is never "stale"
+  });
+});
+
+describe("a claim is not an analysis anywhere else", () => {
+  it("approve and reject refuse a dispute whose analysis is still only a claim", async () => {
+    const { approveDispute, rejectDispute } = await import("../approve");
+    const { createFakeDisputesRepo } = await import("./fakes");
+    const claimed = analysed({ analysisComputedAt: `pending:${NOW.toISOString()}|x`, isSeed: false, isDemo: false });
+    const repo = createFakeDisputesRepo([makeRecord(claimed)], artefactRows(ORDER_ID, SEED_C));
+    const req = { disputeId: DISPUTE_ID, sessionId: SESSION, merchantUserId: "m", action: "submit_evidence" as const };
+    expect(await approveDispute(req, { repo, executor: { paypal: null, demoMode: false } })).toEqual({ kind: "not_analyzed" });
+    expect(await rejectDispute(req, { repo })).toEqual({ kind: "not_analyzed" });
+    expect(repo.inserts).toEqual({ approvals: 0, executions: 0, rejections: 0 });
+  });
+});

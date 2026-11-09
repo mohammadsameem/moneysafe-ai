@@ -97,8 +97,14 @@ export function createFakeReadRepo(records: DisputeRecord[], artefacts: Evidence
 // ---------------------------------------------------------------------------
 export interface FakeAnalysisRepo extends DisputesAnalysisRepo {
   records: DisputeRecord[];
+  /** Every patch passed to saveAnalysis (whether or not it was applied). */
   saves: AnalysisPatch[];
-  /** Make the next saveAnalysis lose the race: another request saved `winner` first. */
+  /** Number of claimAnalysis calls that won. */
+  claimsWon: number;
+  /** Number of claimAnalysis calls that lost. */
+  claimsLost: number;
+  releases: number;
+  /** The next saveAnalysis finds its claim already taken over: `winner` was saved by someone else. */
   loseNextSave(winner: AnalysisPatch): void;
 }
 
@@ -106,34 +112,68 @@ export function createFakeAnalysisRepo(records: DisputeRecord[], artefacts: Evid
   const read = createFakeReadRepo(records, artefacts);
   const saves: AnalysisPatch[] = [];
   let winner: AnalysisPatch | null = null;
+  const stats = { claimsWon: 0, claimsLost: 0, releases: 0 };
 
-  const apply = (id: string, patch: AnalysisPatch): Dispute | null => {
-    const i = records.findIndex((r) => r.dispute.id === id);
+  const indexOf = (id: string) => records.findIndex((r) => r.dispute.id === id);
+  const setMarker = (id: string, patch: Partial<Dispute>) => {
+    const i = indexOf(id);
     const current = records[i];
-    if (!current || current.dispute.analysisComputedAt !== null) return null; // WHERE analysis_computed_at IS NULL
-    const updated = { ...current.dispute, ...patch } as Dispute;
-    records[i] = { ...current, dispute: updated };
-    return updated;
+    if (current) records[i] = { ...current, dispute: { ...current.dispute, ...patch } as Dispute };
   };
 
-  return {
+  const repo: FakeAnalysisRepo = {
     ...read,
     records,
     saves,
+    get claimsWon() {
+      return stats.claimsWon;
+    },
+    get claimsLost() {
+      return stats.claimsLost;
+    },
+    get releases() {
+      return stats.releases;
+    },
     loseNextSave: (w) => {
       winner = w;
     },
-    async saveAnalysis(id, patch) {
+
+    // One synchronous step, like the single UPDATE ... WHERE it mirrors: only one caller can win.
+    async claimAnalysis(id, token, staleBeforeIso) {
+      const current = records[indexOf(id)]?.dispute;
+      const marker = current?.analysisComputedAt ?? null;
+      const free = marker === null;
+      const time = marker?.slice(8, 32) ?? "";
+      const stale = marker !== null && marker.startsWith("pending:") && (time < staleBeforeIso || !/^\d{4}-\d{2}-\d{2}T/.test(time));
+      if (!current || !(free || stale)) {
+        stats.claimsLost += 1;
+        return false;
+      }
+      setMarker(id, { analysisComputedAt: token });
+      stats.claimsWon += 1;
+      return true;
+    },
+
+    async saveAnalysis(id, patch, token) {
       saves.push(patch);
       if (winner) {
         const w = winner;
         winner = null;
-        apply(id, w); // the other request got there first
+        setMarker(id, { ...w }); // someone else took the claim over and finished
         return null;
       }
-      return apply(id, patch);
+      const current = records[indexOf(id)]?.dispute;
+      if (!current || current.analysisComputedAt !== token) return null; // WHERE analysis_computed_at = token
+      setMarker(id, { ...patch });
+      return records[indexOf(id)]!.dispute;
+    },
+
+    async releaseAnalysisClaim(id, token) {
+      stats.releases += 1;
+      if (records[indexOf(id)]?.dispute.analysisComputedAt === token) setMarker(id, { analysisComputedAt: null });
     },
   };
+  return repo;
 }
 
 // ---------------------------------------------------------------------------
