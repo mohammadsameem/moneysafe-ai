@@ -15,7 +15,7 @@ interface NavItem {
 const ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/", available: true },
   { label: "Orders", href: "/orders", available: true },
-  { label: "Disputes", href: "/disputes", available: false, soon: "M2" },
+  { label: "Disputes", href: "/disputes", available: true },
   { label: "Insights", href: "/insights", available: false, soon: "M4" },
   { label: "Agent Activity", href: "/activity", available: false, soon: "M3" },
 ];

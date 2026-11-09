@@ -464,11 +464,20 @@
 
 ### M2-06 · Dispute inbox UI
 
-- [ ] Dispute inbox page (`/disputes`):
+- [x] Dispute inbox page (`/disputes`):
   - **Open tab** (default): table (reason, amount, `<DeadlineCountdown>`, order link, status, demo badge); default sort by deadline; skeleton + empty state
   - **Resolved tab**: table (reason, amount, outcome badge, resolved date, order link); sorted by resolved date descending; includes H1–H5 seed rows + any disputes resolved during the session
   - `<DeadlineCountdown deadline />` component — client-side live update; red < 48 h
   - Resolved disputes must not appear in the Open tab and vice versa
+
+
+> M2-06 notes (4 new tests; 607 in total):
+>
+> - **`/disputes`** (`src/app/(app)/disputes/(list)/page.tsx`, server-rendered): Open tab (default) and Resolved tab (`?tab=resolved`; anything else falls back to Open). Open: reason (linked), amount, live `<DeadlineCountdown>`, order link, status, Demo data badge; sorted by deadline. Resolved: reason, amount, outcome badge (with \"simulated outcome\" when it was), resolved date, order link; newest first. A dispute is on exactly one tab (the read layer decides). Skeleton (`loading.tsx`, scoped to the list with a route group so a missing dispute still returns 404) and an empty state per tab. Less important columns hide on narrow screens.
+> - **`<DeadlineCountdown>`** (client): the server renders the first value; the browser refreshes it every 30 s. Red under 48 hours (REQ-DIS-02), with a screen-reader \"urgent\" note.
+> - **Shared look** (`src/lib/disputes/present.ts`, `src/components/tone-badge.tsx`): one colour language, green good, amber needs attention, red bad or urgent, and the text always says it too. The Disputes link in the sidebar is now live.
+> - **Verified live** (dev server, real Supabase, signed in): signed-out redirect; tabs; the 3 open seeds each with a Demo data badge, ordered SEED-E (40 h), SEED-D (48 h), SEED-C (72 h); countdowns `1d 15h`, `1d 23h`, `2d 23h left`; SEED-E red, SEED-C not; no resolved dispute on Open; Resolved shows the 5 historical seeds with 2 Won, 1 Lost, 2 Refunded, newest first, no countdowns.
+> - **Not verified:** a real browser (the live tick, layout at 375 px). The checks read server-rendered HTML. No `GET /api/disputes` route was added: the pages read through the same service the API would (design table lists it; nothing calls it yet).
 
 ---
 
