@@ -82,13 +82,16 @@ export async function callWithFallback<T>(
   // Logging is best effort: a failed log write must not change the outcome.
   const log = async (entry: Omit<LlmActivityEntry, "stepType" | "toolName" | "sessionId" | "refOrderId" | "refDisputeId"> & { toolName?: string }) => {
     try {
+      const { toolName, ...rest } = entry;
       await deps.logActivity({
         sessionId: meta.sessionId,
         refOrderId: meta.refOrderId,
         refDisputeId: meta.refDisputeId,
         stepType: "llm_call",
-        toolName: meta.toolName,
-        ...entry,
+        // An explicit tool name (e.g. "llm_budget_exceeded") wins; otherwise the caller's. Spreading
+        // `entry` last would let an `undefined` toolName erase the caller's.
+        toolName: toolName ?? meta.toolName,
+        ...rest,
       });
     } catch {
       /* ignore */
@@ -114,7 +117,13 @@ export async function callWithFallback<T>(
     return respondWithFallback("not_configured", "LLM not configured (LLM_API_KEY is empty); used the rule-based result");
   }
 
-  const budget = await deps.checkBudget(meta.sessionId);
+  let budget: BudgetDecision;
+  try {
+    budget = await deps.checkBudget(meta.sessionId);
+  } catch {
+    // The budget store (the database) is unreachable. Fail closed: no model call, rule-based result.
+    return respondWithFallback("unexpected_error", "budget check failed; used the rule-based result");
+  }
   if (!budget.allowed) {
     const limit = budget.reason ?? "daily";
     return respondWithFallback(

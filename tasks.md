@@ -235,7 +235,7 @@
 - [x] `src/lib/ai/risk-explainer.ts`:
   - `explainRisk(...)` — `callWithFallback((ctx) => callStructured({ providers: getConfiguredProviders(), tool: risk_explanation, schema, prompt, onAttempt: ctx.onAttempt }).then(r => r.data), ruleBasedExplanation, meta, deps)`
   - `draftVerification(...)` — same pattern with the `verification_draft` tool and the static template as the fallback
-- [ ] Bind the real `LlmDeps`: `logActivity` from M1-08 (done), `checkBudget` from M1-09b, `isConfigured = () => getConfiguredProviders().length > 0`. **Deliberately not bound yet:** `createOrderAiHooks(deps)` (`src/lib/orders/ai-hooks.ts`) is built and tested, but `orders/runtime.ts` does not set `deps.ai` until `checkLlmBudget` exists, so no model call can happen without the budget guard. Bind it in M1-09b
+- [x] Bind the real `LlmDeps`: `src/lib/ai/runtime.ts` `getLlmDeps()` = `logActivity` (M1-08) + `checkLlmBudget` (M1-09b) + `isConfigured = () => getConfiguredProviders().length > 0`; `orders/runtime.ts` now sets `deps.ai = createOrderAiHooks({ llm: getLlmDeps() })`
 
 > M1-09 notes (47 new tests; 282 in total, all offline with `fetch` faked):
 >
@@ -251,16 +251,25 @@
 
 ### M1-09b · LLM budget guard + API session protection
 
-- [ ] `src/lib/ai/rate-limit.ts`: `checkLlmBudget(sessionId): Promise<{ allowed: boolean; reason?: 'session' | 'daily' }>`
+- [x] `src/lib/ai/rate-limit.ts`: `checkLlmBudget(sessionId): Promise<{ allowed: boolean; reason?: 'session' | 'daily' }>`
   - Per-session: 10 calls per rolling hour (`llm_rate_limits`; reset when `now() > window_start + 1h`)
   - Global daily cap: `LLM_DAILY_CAP` env (default **200**) against `llm_daily_usage` for the current UTC day
   - Increment both counters atomically in one transaction; only increment when allowed
-- [ ] `callWithFallback` calls `checkLlmBudget` first (the gate itself is already implemented in `call-with-fallback.ts` against an injected `checkBudget`; this task supplies the real `checkLlmBudget` and binds it). On breach: skip the LLM call, return the rule-based fallback with `usedFallback = true`, log `agent_activity` with `tool_name = 'llm_budget_exceeded'`, `status = 'fallback'`, and `input_summary` naming the limit. **No HTTP 429 anywhere.**
-- [ ] UI shows the visible note "AI unavailable — showing rule-based result." wherever `usedFallback` is true
-- [ ] `src/middleware.ts`: require a valid NextAuth session on every `/api/*` route **except** `/api/demo/status` and `/api/auth/*`; unauthenticated API calls return 401 JSON
-  - Decide before building: `GET /api/orders/paypal-return` and `/paypal-cancel` are browser navigations from PayPal. A JSON 401 there would show the buyer raw JSON. They already check the session themselves and redirect to `/login`, so either exempt them from the middleware or make the middleware redirect for those two paths (needs your call, because it changes the exemption list above)
+- [x] `callWithFallback` calls `checkLlmBudget` first (the gate itself is already implemented in `call-with-fallback.ts` against an injected `checkBudget`; this task supplies the real `checkLlmBudget` and binds it). On breach: skip the LLM call, return the rule-based fallback with `usedFallback = true`, log `agent_activity` with `tool_name = 'llm_budget_exceeded'`, `status = 'fallback'`, and `input_summary` naming the limit. **No HTTP 429 anywhere.**
+- [ ] UI shows the visible note "AI unavailable — showing rule-based result." wherever `usedFallback` is true (**moves to M1-11**: there is no UI yet; `usedFallback` is already stored and returned)
+- [x] `src/middleware.ts`: require a valid NextAuth session on every `/api/*` route **except** `/api/demo/status` and `/api/auth/*`; unauthenticated API calls return 401 JSON
+  - **Open decision for you:** `GET /api/orders/paypal-return` and `/paypal-cancel` are browser navigations from PayPal. As specified, the middleware answers a sessionless call with 401 JSON (confirmed live), so the buyer would see raw JSON and the routes' own redirect to `/login` is unreachable. Options: (a) exempt those two paths from the middleware (they still check the session and redirect), or (b) have the middleware redirect to `/login` for them. Not changed, because it alters the exemption list above
 - [x] Add `LLM_DAILY_CAP` to `src/lib/env.ts` and `.env.example` (default 200; verified by `providers.test.ts`)
-- [ ] Unit tests (`src/lib/ai/__tests__/rate-limit.test.ts`): allowed under both limits; session breach → `{ allowed:false, reason:'session' }`; daily breach → `reason:'daily'`; counters not incremented on breach; session window resets after 1 hour; `callWithFallback` returns the fallback (no LLM call) on breach (this last case is already covered in `call-with-fallback.test.ts` with a fake `checkBudget`)
+- [x] Unit tests (`src/lib/ai/__tests__/rate-limit.test.ts`): allowed under both limits; session breach → `{ allowed:false, reason:'session' }`; daily breach → `reason:'daily'`; counters not incremented on breach; session window resets after 1 hour; `callWithFallback` returns the fallback (no LLM call) on breach (this last case is already covered in `call-with-fallback.test.ts` with a fake `checkBudget`)
+
+> M1-09b notes (49 new tests; 333 in total):
+>
+> - **`checkLlmBudget(sessionId, opts)`**: two single-statement upserts in one transaction. The session row restarts at 1 when its window is more than an hour old (exactly one hour is still the same window), otherwise counts up only while below 10; the daily row counts up only while below `LLM_DAILY_CAP`. If the day is full the transaction is rolled back, so the session is not charged for a call that never happens. Calls with no session id share one bucket. 13 tests: 6 on control flow with a fake db, 7 against real Postgres (window edge at exactly 1 h and 1 h + 1 ms, independence of sessions, rollback leaves no session row, and 15 concurrent calls from one session give exactly 10 allowed; 12 sessions against a cap of 8 give exactly 8). The live tests use far-future 2099 days and unique session ids and delete their rows.
+> - **Budget store down fails closed:** `callWithFallback` now catches a throwing `checkBudget` and returns the rule-based result with no model call (new test).
+> - **Bug found by the live run and fixed:** fallback rows in `agent_activity` were stored with an empty `tool_name` because an `undefined` toolName overwrote the caller's. Fixed in `callWithFallback`, plus `toActivityRow` stores `unknown` rather than an empty name; regression tests added for both.
+> - **Middleware** (`src/middleware.ts`, Edge): 401 JSON `{error:"unauthorized"}` on every `/api/*` except `/api/demo/status` and `/api/auth/*` (rules in `src/lib/api-access.ts`, 22 tests incl. look-alikes such as `/api/authx`, `/api/Demo/status`). It verifies the signed JWT with `NEXTAUTH_SECRET` and requires a `sid`. Cookie naming moved to `src/lib/session-cookie.ts` so the Edge bundle imports nothing Node-only; `npm run build` passes (middleware 48.6 kB). Route handlers still check the session themselves.
+> - **Verified live** (dev server, `DEMO_MODE=true` for the run, real Supabase): `/api/demo/status` and `/api/auth/session` open; sessionless and forged-cookie calls get 401; a signed-in `POST /api/orders` makes a demo order scored 60 / verify with the rule-based explanation, the static verification draft and `used_fallback = true`; activity rows are create (simulated), score (success) and two LLM fallbacks naming `risk_explanation` / `verification_draft`; no LLM budget was spent without a key; the demo password appears in no stored row. Test rows were deleted.
+> - **Not verified:** a real model call. There is still no `LLM_API_KEY`, so the prompts, the 12 s timeout and a counted budget unit on a real call have not run.
 
 ---
 

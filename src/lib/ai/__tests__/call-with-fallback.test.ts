@@ -128,6 +128,44 @@ describe("callWithFallback", () => {
     }
   });
 
+  it("an unreachable budget store fails closed: rule-based result, no network call, no throw", async () => {
+    const { fetchMock, deps, logs, call } = setup();
+    (deps.checkBudget as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("connection refused: postgres://user:pw@host"));
+
+    const out = await call();
+
+    expect(out).toEqual({ result: RULE_BASED, usedFallback: true, reason: "unexpected_error" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ status: "fallback", outputSummary: "budget check failed; used the rule-based result" });
+    expect(JSON.stringify(logs)).not.toContain("postgres://");
+  });
+
+  it("every logged row carries the caller's tool name, except the budget row which names the limit", async () => {
+    // Regression: an undefined toolName on the fallback entry used to erase the caller's name.
+    const notConfigured = setup({ providers: [] });
+    await notConfigured.call();
+    expect(notConfigured.logs.map((l) => l.toolName)).toEqual(["risk_explanation"]);
+
+    const invalid = setup();
+    invalid.fetchMock.mockResolvedValueOnce(toolCallResponse({ explanation: 42 }));
+    await invalid.call();
+    expect(invalid.logs.map((l) => l.toolName)).toEqual(["risk_explanation", "risk_explanation"]); // attempt row, fallback row
+
+    const down = setup();
+    down.fetchMock.mockResolvedValueOnce(errorResponse(503)).mockResolvedValueOnce(errorResponse(503));
+    await down.call();
+    expect(down.logs.map((l) => l.toolName)).toEqual(["risk_explanation", "risk_explanation", "risk_explanation"]);
+
+    const budget = setup({ budget: { allowed: false, reason: "daily" } });
+    await budget.call();
+    expect(budget.logs.map((l) => l.toolName)).toEqual(["llm_budget_exceeded"]);
+
+    for (const l of [...notConfigured.logs, ...invalid.logs, ...down.logs, ...budget.logs]) {
+      expect(l.toolName).toBeTruthy();
+    }
+  });
+
   it("a failing activity logger never changes the outcome", async () => {
     const { fetchMock, deps, call } = setup();
     (deps.logActivity as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("db down"));

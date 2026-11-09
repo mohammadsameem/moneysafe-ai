@@ -13,6 +13,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
+import { sessionCookieName, shouldUseSecureCookies } from "./session-cookie";
 
 /** The public demo account's email. Shown on the login page. */
 export const DEMO_LOGIN_EMAIL = "demo@moneysafe.ai";
@@ -47,8 +48,7 @@ export function authorizeDemo(
   return emailOk && passwordOk ? { id: MERCHANT_USER_ID, email: DEMO_LOGIN_EMAIL, name: "Demo merchant" } : null;
 }
 
-/** Same rule NextAuth uses itself: secure cookies exactly when the app is served over https. */
-const secureCookies = (process.env.NEXTAUTH_URL ?? "").trim().toLowerCase().startsWith("https://");
+const secureCookies = shouldUseSecureCookies(process.env.NEXTAUTH_URL);
 
 export const authOptions: NextAuthOptions = {
   secret: process.env.NEXTAUTH_SECRET,
@@ -63,7 +63,7 @@ export const authOptions: NextAuthOptions = {
   ],
   cookies: {
     sessionToken: {
-      name: secureCookies ? "__Secure-next-auth.session-token" : "next-auth.session-token",
+      name: sessionCookieName(process.env.NEXTAUTH_URL),
       options: { httpOnly: true, sameSite: "lax", path: "/", secure: secureCookies },
     },
   },

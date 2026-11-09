@@ -93,6 +93,12 @@ describe("toActivityRow", () => {
     expect(toActivityRow({ ...meta, durationMs: 1.4 }).durationMs).toBe(1);
   });
 
+  it("never stores an empty tool name", () => {
+    expect(toActivityRow({ ...meta, toolName: "" }).toolName).toBe("unknown");
+    expect(toActivityRow({ ...meta, toolName: undefined as unknown as string }).toolName).toBe("unknown");
+    expect(toActivityRow({ ...meta, toolName: "   " }).toolName).toBe("unknown");
+  });
+
   it("caps an over-long tool name", () => {
     expect(toActivityRow({ ...meta, toolName: "t".repeat(300) }).toolName.length).toBe(100);
   });

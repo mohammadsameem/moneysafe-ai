@@ -40,7 +40,8 @@ export function toActivityRow(meta: ActivityMeta): NewAgentActivityRow {
     refOrderId: meta.refOrderId ?? null,
     refDisputeId: meta.refDisputeId ?? null,
     stepType: meta.stepType,
-    toolName: summarize(meta.toolName, TOOL_NAME_MAX_CHARS),
+    // tool_name is NOT NULL but accepts "", so a missing name would be stored silently. Make it visible.
+    toolName: summarize(meta.toolName, TOOL_NAME_MAX_CHARS) || "unknown",
     inputSummary: summarize(meta.inputSummary),
     outputSummary: summarize(meta.outputSummary),
     durationMs: duration,
