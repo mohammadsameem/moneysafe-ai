@@ -20,13 +20,15 @@ interface Props {
   amountUsd: number;
   /** True when approving is simulated (Demo Mode, or a seeded / demo dispute): nothing is sent to PayPal. */
   willSimulate: boolean;
+  /** Show "Simulate outcome (Won / Lost)" (REQ-DIS-11; the server re-checks). */
+  canSimulateOutcome?: boolean;
 }
 
 /**
  * Approve / Edit + Approve / Reject (REQ-DIS-05). The merchant's click is the only thing that can
  * start a PayPal action; the server re-checks everything (approval gate, idempotency).
  */
-export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate }: Props) {
+export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate, canSimulateOutcome = false }: Props) {
   const router = useRouter();
   const draft = panel.mode === "decide" ? panel.draft ?? "" : "";
   const [text, setText] = useState(draft);
@@ -72,6 +74,33 @@ export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate }: Pro
     }
   }
 
+  async function recordOutcome(outcome: "won" | "lost") {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/disputes/${disputeId}/simulate-outcome`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ outcome }),
+      });
+      if (response.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      if (response.ok) {
+        setNotice({ tone: "ok", text: `Recorded: dispute ${outcome === "won" ? "won" : "lost"} (simulated outcome).` });
+      } else {
+        setNotice({ tone: "error", text: body?.message ?? "The outcome could not be recorded." });
+      }
+      router.refresh();
+    } catch {
+      setNotice({ tone: "error", text: "We could not reach the server. Please try again." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const banner = notice ? (
     <div
       role={notice.tone === "error" ? "alert" : "status"}
@@ -107,6 +136,23 @@ export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate }: Pro
             {panel.action === "submit_evidence" ? `Evidence${panel.edited ? " (with your edits)" : ""} was ${panel.simulated ? "simulated" : "sent to PayPal"}` : `The refund was ${panel.simulated ? "simulated" : "accepted with PayPal"}`} on{" "}
             {new Date(panel.executedAt).toUTCString().replace(" GMT", " UTC")}.
           </p>
+        </div>
+      ) : null}
+
+      {panel.mode === "done" && panel.action === "submit_evidence" && canSimulateOutcome ? (
+        <div className="space-y-2 rounded-md border border-violet-300 bg-violet-50 px-3 py-3 text-sm text-violet-950">
+          <p className="flex flex-wrap items-center gap-2 font-medium">
+            Simulate outcome <SimulatedBadge />
+          </p>
+          <p className="text-xs">Demo only: pick how PayPal resolved this dispute. It is recorded as a simulated outcome.</p>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Simulate outcome">
+            <button type="button" className={primary} disabled={busy} onClick={() => void recordOutcome("won")}>
+              {busy ? "Recording…" : "Won"}
+            </button>
+            <button type="button" className={danger} disabled={busy} onClick={() => void recordOutcome("lost")}>
+              Lost
+            </button>
+          </div>
         </div>
       ) : null}
 

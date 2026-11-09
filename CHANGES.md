@@ -6,6 +6,8 @@ Notable changes to the spec and architecture, newest first. Task-by-task progres
 ## Deviation log
 One line per deviation from the written specs, newest first.
 
+- 2026-11-09 M3-06 / REQ-DU-02, REQ-DIS-11: a session gets at most one simulated dispute per order (deterministic id from session + order, `ON CONFLICT DO NOTHING`); a second click returns the existing dispute (409 with its id), which makes the button idempotent and race-safe with no schema change. "Simulate outcome" is offered on the session's own `is_demo` disputes after `submit_evidence` ran, whether or not `DEMO_MODE` is set (demo disputes are demo data by definition); it is never offered on seeded, real or refunded disputes.
+
 - 2026-11-09 M3-03 / REQ-EV-01: seeded orders cannot be shipped and their evidence cannot be appended to (409 `shared_example`); they are shared by every session, so changing one would change it for everyone. Shipping works on the session's own orders (sandbox or demo). The real PayPal add-tracking call is implemented but unverified: no sandbox order has ever been captured.
 
 - 2026-11-09 M3-01 / REQ-EV-01: no real carrier tracking API is integrated. AfterShip, TrackingMore and 17TRACK all require an account and an API key created by the project owner, which cannot be done unattended. Tracking events always come from the deterministic mocked provider and are labelled `isMocked: true` ("mocked" badge); `TrackingProvider` is the adapter a real one would implement.

@@ -7,7 +7,8 @@ import type { AnalyzeDeps } from "./analyze";
 import type { ApproveDeps } from "./approve";
 import type { DetailDeps } from "./detail";
 import type { DisputeReadDeps } from "./read";
-import { createDrizzleDisputesRepo } from "./repo";
+import { createDrizzleDisputesRepo, createDrizzleSimulationRepo } from "./repo";
+import type { SimulationDeps } from "./simulate";
 
 export function buildReadDeps(): DisputeReadDeps {
   return {
@@ -37,6 +38,15 @@ export function buildApproveDeps(): ApproveDeps {
       // M4 binds the learning-loop check here; until then only the resolved counter moves.
     },
     log: logActivity,
+  };
+}
+
+export function buildSimulationDeps(): SimulationDeps {
+  return {
+    repo: createDrizzleSimulationRepo(),
+    demoMode: isDemoModeEnabled(),
+    log: logActivity,
+    // onOutcomeRecorded: M4 binds the learning-loop check here, as for refunds.
   };
 }
 

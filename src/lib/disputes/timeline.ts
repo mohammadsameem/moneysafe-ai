@@ -102,8 +102,19 @@ export function buildTimeline({ view, evidence, history }: TimelineInput): Timel
   // 6. PayPal action
   if (execution?.executedAt) {
     const action = ACTION_LABEL[execution.actionType as keyof typeof ACTION_LABEL] ?? "action executed";
+    // The contest path resolves later (REQ-DIS-11); the refund path's outcome is the action itself.
+    const contestOutcome =
+      resolved && execution.actionType === "submit_evidence" && view.outcome
+        ? ` Outcome: ${OUTCOME_LABEL[view.outcome]}${view.outcomeIsSimulated ? " (simulated outcome)" : ""}.`
+        : "";
     steps.push(
-      step("action", "done", execution.executedAt, execution.isSimulated ? `Simulated: ${action}. Nothing was sent to PayPal.` : `PayPal confirmed: ${action}.`, execution.isSimulated),
+      step(
+        "action",
+        "done",
+        execution.executedAt,
+        (execution.isSimulated ? `Simulated: ${action}. Nothing was sent to PayPal.` : `PayPal confirmed: ${action}.`) + contestOutcome,
+        execution.isSimulated || (contestOutcome !== "" && view.outcomeIsSimulated),
+      ),
     );
   } else if (execution) {
     steps.push(step("action", "failed", null, "The last attempt to send this to PayPal failed. Retry from the decision panel; it is safe."));

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { ActionExecution, ApprovalRecord, Dispute, EvidenceArtefact } from "@/db/schema";
+import type { ActionExecution, ApprovalRecord, Dispute, EvidenceArtefact, Order } from "@/db/schema";
 import { makeOrder } from "@/lib/orders/__tests__/fakes";
+import type { SimulationRepo } from "../simulate";
 import {
   ApprovalConflictError,
   type AnalysisPatch,
@@ -181,7 +182,7 @@ export function createFakeAnalysisRepo(records: DisputeRecord[], artefacts: Evid
 // ---------------------------------------------------------------------------
 export interface FakeOutcomeRow {
   disputeId: string;
-  outcome: "refunded";
+  outcome: "refunded" | "won" | "lost";
   riskScoreSnapshot: number;
   verdictSnapshot: "ship" | "verify" | "hold";
   winProbabilitySnapshot: number;
@@ -326,6 +327,56 @@ export function createFakeDisputesRepo(records: DisputeRecord[], artefacts: Evid
         counter.value += 1;
       }
       return { applied: true, execution, outcomeRecorded: !already };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Demo utilities (M3-06, M3-08): the disputes fake plus orders and conditional inserts.
+// ---------------------------------------------------------------------------
+export interface FakeSimulationRepo extends FakeDisputesRepo, SimulationRepo {
+  orders: Order[];
+  /** Disputes inserted by insertDisputeIfAbsent (a conflicting insert is not counted). */
+  disputeInserts: { value: number };
+}
+
+export function createFakeSimulationRepo(records: DisputeRecord[], orders: Order[] = [], artefacts: EvidenceArtefact[] = []): FakeSimulationRepo {
+  const base = createFakeDisputesRepo(records, artefacts);
+  const disputeInserts = { value: 0 };
+  const setDispute = (id: string, patch: Partial<Dispute>) => {
+    const i = base.records.findIndex((r) => r.dispute.id === id);
+    const current = base.records[i];
+    if (current) base.records[i] = { ...current, dispute: { ...current.dispute, ...patch, updatedAt: NOW.toISOString() } };
+  };
+
+  return {
+    ...base,
+    orders,
+    disputeInserts,
+    async findVisibleOrder(orderId, sessionId) {
+      return orders.find((o) => o.id === orderId && (o.isSeed || o.sessionId === sessionId)) ?? null;
+    },
+    async findDisputeById(id) {
+      return base.records.find((r) => r.dispute.id === id)?.dispute ?? null;
+    },
+    async insertDisputeIfAbsent(values) {
+      if (base.records.some((r) => r.dispute.id === values.id)) return false; // ON CONFLICT (id) DO NOTHING
+      const order = orders.find((o) => o.id === values.orderId) ?? makeOrder({ id: values.orderId });
+      const dispute = makeDispute({ ...(values as Partial<Dispute>), createdAt: NOW.toISOString(), updatedAt: NOW.toISOString() });
+      base.records.push({ dispute, order });
+      disputeInserts.value += 1;
+      return true;
+    },
+    async recordSimulatedOutcome({ disputeId, outcome, snapshot }) {
+      const d = base.records.find((r) => r.dispute.id === disputeId)?.dispute;
+      if (!d || d.status !== "action_taken" || !d.isDemo || d.isSeed) return { applied: false, outcomeRecorded: false };
+      setDispute(disputeId, { status: outcome === "won" ? "resolved_won" : "resolved_lost", outcome, outcomeIsSimulated: true });
+      const already = base.outcomes.some((o) => o.disputeId === disputeId);
+      if (!already) {
+        base.outcomes.push({ disputeId, outcome, ...snapshot, isSimulated: true });
+        base.counter.value += 1;
+      }
+      return { applied: true, outcomeRecorded: !already };
     },
   };
 }

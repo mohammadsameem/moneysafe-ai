@@ -613,13 +613,22 @@
 
 ### M3-06 · Simulate dispute + simulate outcome
 
-- [ ] `POST /api/disputes/simulate` — body `{ orderId }`; creates synthetic dispute (`is_demo = true`, `deadline_offset_hours = 72`); order must be shipped
-- [ ] `POST /api/disputes/[id]/simulate-outcome` — body `{ outcome: 'won' | 'lost' }`:
+- [x] `POST /api/disputes/simulate` — body `{ orderId }`; creates synthetic dispute (`is_demo = true`, `deadline_offset_hours = 72`); order must be shipped
+- [x] `POST /api/disputes/[id]/simulate-outcome` — body `{ outcome: 'won' | 'lost' }`:
   - Only available when `action_type = 'submit_evidence'` has been executed/simulated (contest path)
   - Only allowed when `is_demo = true` and action executed/simulated
   - Updates dispute; inserts to `dispute_outcomes`; increments `resolved_since_last_proposal`
   - **Not** available after `accept_claim` (refund outcome is auto-recorded in M2-04)
-- [ ] "Simulate outcome (Won / Lost)" UI control: shown only after `submit_evidence` action; `<SimulatedBadge>` on simulated outcomes in timeline and dispute list
+- [x] "Simulate outcome (Won / Lost)" UI control: shown only after `submit_evidence` action; `<SimulatedBadge>` on simulated outcomes in timeline and dispute list
+
+
+> M3-06 notes (11 new tests; 691 in total):
+>
+> - **`POST /api/disputes/simulate`** (`src/lib/disputes/simulate.ts`, `simulateDispute`): the order must be visible to the session and shipped, and be seeded or demo data (or any order in Demo Mode). It opens an `item_not_received` dispute for the disputed order amount with `is_demo = true`, `session_id` = caller, `deadline_offset_hours = 72` and a concrete `deadline_at` 72 h out (so the countdown counts down), and no analysis (the detail page analyses it). One per (session, order): the id is `uuidv5(session + order)` and the insert is `ON CONFLICT DO NOTHING`, so a second click (or a race) returns 409 with the same `disputeId`; the button follows it. Logged as `simulate_dispute` (simulated).
+> - **`POST /api/disputes/[id]/simulate-outcome`** (`simulateOutcome`): `{ outcome: 'won' | 'lost' }`, only on the session's own `is_demo`, non-seed dispute after `submit_evidence` executed (status `action_taken`). One transaction (`recordSimulatedOutcome`): status `resolved_won` / `resolved_lost`, `outcome_is_simulated = true`, `dispute_outcomes` row (`ON CONFLICT DO NOTHING`), counter bumped only if that row was inserted. Refused: before evidence (`not_contested`), after `accept_claim` (`refund_path`), seeded / real disputes (`not_demo`), resolved (`already_resolved`), another session's (404). `onOutcomeRecorded` stays unbound for M4.
+> - **UI:** the decision panel's done state shows "Simulate outcome (Won / Lost)" with a Simulated badge only when `canSimulateOutcome` (computed in `loadDisputeDetail`); the timeline's action step adds "Outcome: Won (simulated outcome)"; the header and the Resolved tab already show "(simulated outcome)".
+> - **Verified live** (dev server, `DEMO_MODE=true`, real Supabase, two sessions, 21/21): 401 / 400 / 409 `not_shipped` (SEED-B); simulate on SEED-A creates the row as specified and a second click returns the same id with no new row; the other session gets its own dispute and cannot open mine; `not_contested` before evidence, `not_demo` on SEED-C; real analysis (Groq) recommended contest, approve simulated; the page showed Won / Lost; Won recorded the dispute, one outcome row and counter 1; a second call 409 with the counter still 1; the page and the Resolved tab show "simulated outcome". Test data removed and the counter reset afterwards.
+> - **Not verified:** the Won / Lost buttons clicked in a real browser; the refund-path refusal live (unit-tested; the live analysis recommended contest).
 
 ---
 

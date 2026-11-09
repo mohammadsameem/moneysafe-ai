@@ -85,7 +85,7 @@ export default async function DisputeDetailPage({ params }: { params: { id: stri
             ) : null}
           </div>
           <div className="lg:col-span-3">
-            <ApprovalPanel disputeId={view.id} panel={panel} amountUsd={view.amountUsd} willSimulate={willSimulate} />
+            <ApprovalPanel disputeId={view.id} panel={panel} amountUsd={view.amountUsd} willSimulate={willSimulate} canSimulateOutcome={detail.canSimulateOutcome} />
           </div>
           <div className="lg:col-span-2">
             <DisputeTimeline steps={timeline} />

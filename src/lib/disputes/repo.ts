@@ -16,6 +16,7 @@ import {
 } from "@/db/schema";
 import { isUuid } from "@/lib/orders/queries";
 import { CLAIM_PREFIX, CLAIM_TIME_LENGTH, CLAIM_TIME_START } from "./analysis-state";
+import type { SimulationRepo } from "./simulate";
 import {
   ApprovalConflictError,
   type AnalysisPatch,
@@ -213,3 +214,64 @@ export function createDrizzleDisputesRepo(db: Db = getDb()): DisputesRepo {
 
 /** The read-only view of the same repo (kept for callers that only list and open disputes). */
 export const createDrizzleDisputesReadRepo = createDrizzleDisputesRepo;
+
+/** The disputes repo plus what the demo utilities need (M3-06, M3-08). */
+export function createDrizzleSimulationRepo(db: Db = getDb()): SimulationRepo {
+  return {
+    ...createDrizzleDisputesRepo(db),
+
+    async findVisibleOrder(orderId, sessionId) {
+      if (!isUuid(orderId)) return null;
+      const rows = await db
+        .select()
+        .from(orders)
+        .where(and(eq(orders.id, orderId), or(eq(orders.isSeed, true), eq(orders.sessionId, sessionId))))
+        .limit(1);
+      return rows[0] ?? null;
+    },
+
+    async findDisputeById(id) {
+      if (!isUuid(id)) return null;
+      const rows = await db.select().from(disputes).where(eq(disputes.id, id)).limit(1);
+      return rows[0] ?? null;
+    },
+
+    async insertDisputeIfAbsent(values) {
+      const rows = await db.insert(disputes).values(values).onConflictDoNothing({ target: disputes.id }).returning({ id: disputes.id });
+      return rows.length > 0;
+    },
+
+    async recordSimulatedOutcome({ disputeId, outcome, snapshot }) {
+      return db.transaction(async (tx) => {
+        const updated = await tx
+          .update(disputes)
+          .set({ status: outcome === "won" ? "resolved_won" : "resolved_lost", outcome, outcomeIsSimulated: true })
+          .where(and(eq(disputes.id, disputeId), eq(disputes.status, "action_taken"), eq(disputes.isDemo, true), eq(disputes.isSeed, false)))
+          .returning({ id: disputes.id });
+        if (updated.length === 0) return { applied: false, outcomeRecorded: false };
+
+        const inserted = await tx
+          .insert(disputeOutcomes)
+          .values({
+            disputeId,
+            outcome,
+            riskScoreSnapshot: snapshot.riskScoreSnapshot,
+            verdictSnapshot: snapshot.verdictSnapshot,
+            winProbabilitySnapshot: snapshot.winProbabilitySnapshot,
+            signalWeightsId: snapshot.signalWeightsId,
+            isSimulated: true,
+          })
+          .onConflictDoNothing({ target: disputeOutcomes.disputeId })
+          .returning({ id: disputeOutcomes.id });
+        const recorded = inserted.length > 0;
+        if (recorded) {
+          await tx
+            .update(signalWeights)
+            .set({ resolvedSinceLastProposal: sql`${signalWeights.resolvedSinceLastProposal} + 1` })
+            .where(eq(signalWeights.isActive, true));
+        }
+        return { applied: true, outcomeRecorded: recorded };
+      });
+    },
+  };
+}

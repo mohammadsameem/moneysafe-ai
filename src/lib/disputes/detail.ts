@@ -11,6 +11,7 @@ import { isAnalysed } from "./analysis-state";
 import { resolveApprovalState, type ApprovalState } from "./approval";
 import { expectedAction } from "./approve";
 import { getDisputeView, isResolvedStatus, type DisputeReadDeps, type DisputeView } from "./read";
+import { canSimulateOutcome } from "./simulate";
 import type { DisputeActionType, DisputesRepo } from "./types";
 
 export type PanelState =
@@ -39,6 +40,8 @@ export interface DisputeDetail {
   history: { approvals: ApprovalRecord[]; executions: ActionExecution[] };
   /** True when approving would be simulated (Demo Mode, or a seeded / demo dispute). */
   willSimulate: boolean;
+  /** REQ-DIS-11: the session's own demo dispute, evidence submitted, not yet resolved (contest path only). */
+  canSimulateOutcome: boolean;
   renderedAt: string;
 }
 
@@ -105,6 +108,11 @@ export async function loadDisputeDetail(id: string, sessionId: string, deps: Det
     panel: derivePanelState(view, dispute.analysisComputedAt, state, history.approvals),
     history,
     willSimulate: shouldSimulateWrite(dispute, deps.demoMode),
+    canSimulateOutcome: canSimulateOutcome(
+      dispute,
+      sessionId,
+      history.executions.some((e) => e.actionType === "submit_evidence" && e.executedAt !== null),
+    ),
     renderedAt: now.toISOString(),
   };
 }
