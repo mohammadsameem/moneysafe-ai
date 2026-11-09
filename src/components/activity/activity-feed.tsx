@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { DemoBadge, SimulatedBadge } from "@/components/badges";
-import type { ActivityEntry, ActivityPage } from "@/lib/activity/queries";
+import { FEED_STATUS_TEXT, PollHttpError } from "@/lib/activity/poll-state";
 import { usePoll } from "@/lib/activity/polling";
+import type { ActivityEntry, ActivityPage } from "@/lib/activity/queries";
 
 const STEP: Record<ActivityEntry["stepType"], { icon: string; label: string }> = {
   paypal_api: { icon: "P", label: "PayPal" },
@@ -66,23 +67,25 @@ export function ActivityFeed({ initial, refOrderId, refDisputeId, full = false, 
     [initial.pageSize, refOrderId, refDisputeId, stepType, status],
   );
 
-  const fetchFn = useCallback(async (): Promise<ActivityPage> => {
-    const response = await fetch(query(1), { cache: "no-store" });
-    if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
-    return (await response.json()) as ActivityPage;
-  }, [query]);
+  const queryKey = query(1);
+  const fetchFn = useCallback(
+    async (signal: AbortSignal): Promise<ActivityPage> => {
+      const response = await fetch(queryKey, { cache: "no-store", signal });
+      if (!response.ok) throw new PollHttpError(response.status);
+      return (await response.json()) as ActivityPage;
+    },
+    [queryKey],
+  );
 
-  // Use the robust polling hook; don't poll on mount (we already have `initial` data from the server)
-  const pollState = usePoll<ActivityPage>({ fetchFn, intervalMs: pollMs, skipInitialPoll: true });
+  // No request at mount (the server rendered `initial`); then one poll per interval while the tab is visible.
+  const poll = usePoll<ActivityPage>({ fetchFn, queryKey, initial, intervalMs: pollMs });
+  const loading = poll.data === null; // a filter just changed and its first answer is not back yet
+  const entries = poll.data?.entries ?? [];
 
-  // On first render, show the server initial data; after that, show the polled data (or keep initial if polling hasn't succeeded yet)
-  const entries = pollState.data?.entries ?? initial.entries;
-
-  // Filters changed: reset page and older entries, and let the poller refresh (it will detect the new query)
+  // Filters changed: start again from page 1.
   useEffect(() => {
     setOlder([]);
     setPage(1);
-    // The polling effect will restart with the new fetchFn
   }, [stepType, status]);
 
   async function loadMore() {
@@ -98,19 +101,11 @@ export function ActivityFeed({ initial, refOrderId, refDisputeId, full = false, 
   const seen = new Set(entries.map((e) => e.id));
   const rows = [...entries, ...older.filter((e) => !seen.has(e.id))];
 
-  // Status line text and state attribute for QA checks
-  const feedStatus = useMemo(() => {
-    if (pollState.sessionEnded) return { text: "Your session has ended; sign in again", state: "session-ended" };
-    if (pollState.error) return { text: "Could not refresh data", state: "error" };
-    if (pollState.retrying) return { text: "Refresh delayed, retrying", state: "retrying" };
-    return { text: "Updates every 5 seconds", state: "ok" };
-  }, [pollState]);
-
   return (
     <section aria-labelledby={`activity-${refOrderId ?? refDisputeId ?? "all"}`} className="rounded-xl border bg-card p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 id={`activity-${refOrderId ?? refDisputeId ?? "all"}`} className="font-medium">{title}</h2>
-        <p className="text-xs text-muted-foreground" aria-live="polite" data-feed-state={feedStatus.state}>{feedStatus.text}</p>
+        <p className={`text-xs ${poll.state === "error" || poll.state === "session-ended" ? "text-amber-800" : "text-muted-foreground"}`} aria-live="polite" data-feed-state={poll.state}>{FEED_STATUS_TEXT[poll.state]}</p>
       </div>
 
       {full ? (
@@ -136,7 +131,9 @@ export function ActivityFeed({ initial, refOrderId, refDisputeId, full = false, 
         </div>
       ) : null}
 
-      {rows.length === 0 ? (
+      {loading ? (
+        <p className="mt-4 rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground" role="status">Loading…</p>
+      ) : rows.length === 0 ? (
         <p className="mt-4 rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">No activity yet.</p>
       ) : (
         <ul className="mt-4 divide-y">

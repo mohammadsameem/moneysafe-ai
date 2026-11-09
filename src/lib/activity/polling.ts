@@ -1,160 +1,105 @@
 import { useEffect, useRef, useState } from "react";
+import { INITIAL_HEALTH, afterFailure, afterSuccess, feedState, nextDelayMs, type FeedState, type Health } from "./poll-state";
 
-/**
- * Polling state for the activity feed. Tracks transient and persistent errors,
- * session expiry, and keeps the last good data visible during transient errors.
- */
-export interface PollState<T> {
-  /** Latest successful data, kept even during transient errors. */
+export interface PollResult<T> {
+  /** The latest answer for the CURRENT query (kept through failures), or null while a changed query is loading. */
   data: T | null;
-  /** Quiet transient state: shown after 1st failure, cleared on next success. */
-  retrying: boolean;
-  /** Persistent error: shown after 3 consecutive failures. */
-  error: boolean;
-  /** Session ended (401): stop polling, show a special message. */
-  sessionEnded: boolean;
+  state: FeedState;
 }
 
-interface UsePollOptions<T> {
-  /** The fetch function: should throw on non-ok status or parse errors. */
-  fetchFn: () => Promise<T>;
-  /** Poll interval in ms (default 5000). */
+interface Options<T> {
+  /** One request. Must throw a `PollHttpError` on a non-2xx answer, and must pass `signal` to `fetch`. */
+  fetchFn: (signal: AbortSignal) => Promise<T>;
+  /** Identifies the query. When it changes, the new query is fetched straight away. */
+  queryKey: string;
+  /** Server-rendered data for the query the component first rendered with, so mount needs no request. */
+  initial: T;
   intervalMs?: number;
-  /** Backoff multiplier on errors (default 2, max 4x the base interval). */
-  backoffFactor?: number;
-  /** If true, don't poll on mount; only start when filters change or manually. */
-  skipInitialPoll?: boolean;
+  /** A request that takes longer than this is aborted and counted as a failure. */
+  timeoutMs?: number;
+}
+
+interface Snapshot<T> {
+  key: string;
+  data: T;
+  health: Health;
 }
 
 /**
- * React hook for robust polling with:
- * - Non-overlapping requests (in-flight guard)
- * - Tab visibility pause/resume (pauses when hidden, resumes immediately when visible)
- * - Backoff on errors (2x interval after 3 failures, max 4x)
- * - Special 401 handling (session ended, stops polling)
- * - Transient vs persistent error states (quiet retry after 1 failure, persistent error after 3)
+ * Poll `fetchFn` while the tab is visible.
  *
- * The poller does NOT start on mount if `skipInitialPoll` is true. Otherwise it polls immediately.
- * It pauses when the tab is hidden and resumes when visible.
+ * - Mount does not fetch (the server already rendered `initial`); the first poll is one interval later. This holds under
+ *   React strict mode, which runs effects twice in development: the effect only fetches at once when the query CHANGED.
+ * - The next poll is scheduled when the previous one has finished, so requests never overlap.
+ * - Hidden tab: the timer is cleared. Visible again: poll now, then keep the cadence.
+ * - A request that hangs is aborted after `timeoutMs`, so it cannot stall polling for ever.
+ * - A 401 stops polling (the session is over). Other failures keep the last good data and retry, backing off after three.
  */
-export function usePoll<T>(options: UsePollOptions<T>): PollState<T> {
-  const { fetchFn, intervalMs = 5000, backoffFactor = 2, skipInitialPoll = false } = options;
-
-  const [state, setState] = useState<PollState<T>>({
-    data: null,
-    retrying: false,
-    error: false,
-    sessionEnded: false,
-  });
-
-  const inflightRef = useRef(false);
-  const consecutiveFailuresRef = useRef(0);
-  const currentIntervalRef = useRef(intervalMs);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const poll = useRef(() => {
-    if (inflightRef.current || state.sessionEnded) return;
-    if (document.visibilityState !== "visible") return;
-
-    inflightRef.current = true;
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15_000);
-
-    fetchFn()
-      .then((data) => {
-        clearTimeout(timeout);
-        inflightRef.current = false;
-        consecutiveFailuresRef.current = 0;
-        currentIntervalRef.current = intervalMs;
-        setState({ data, retrying: false, error: false, sessionEnded: false });
-      })
-      .catch((err: unknown) => {
-        clearTimeout(timeout);
-        inflightRef.current = false;
-
-        const is401 = err instanceof Error && /401|unauthorized/i.test(err.message);
-        if (is401) {
-          setState((prev) => ({ ...prev, retrying: false, error: false, sessionEnded: true }));
-          return; // stop polling
-        }
-
-        consecutiveFailuresRef.current++;
-        if (consecutiveFailuresRef.current === 1) {
-          setState((prev) => ({ ...prev, retrying: true, error: false }));
-        } else if (consecutiveFailuresRef.current >= 3) {
-          setState((prev) => ({ ...prev, retrying: false, error: true }));
-          currentIntervalRef.current = Math.min(intervalMs * backoffFactor, intervalMs * 4);
-        }
-      });
-  });
-
-  // Update the poll ref when fetchFn changes (e.g. filters changed)
-  poll.current = () => {
-    if (inflightRef.current || state.sessionEnded) return;
-    if (document.visibilityState !== "visible") return;
-
-    inflightRef.current = true;
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15_000);
-
-    fetchFn()
-      .then((data) => {
-        clearTimeout(timeout);
-        inflightRef.current = false;
-        consecutiveFailuresRef.current = 0;
-        currentIntervalRef.current = intervalMs;
-        setState({ data, retrying: false, error: false, sessionEnded: false });
-      })
-      .catch((err: unknown) => {
-        clearTimeout(timeout);
-        inflightRef.current = false;
-
-        const is401 = err instanceof Error && /401|unauthorized/i.test(err.message);
-        if (is401) {
-          setState((prev) => ({ ...prev, retrying: false, error: false, sessionEnded: true }));
-          return;
-        }
-
-        consecutiveFailuresRef.current++;
-        if (consecutiveFailuresRef.current === 1) {
-          setState((prev) => ({ ...prev, retrying: true, error: false }));
-        } else if (consecutiveFailuresRef.current >= 3) {
-          setState((prev) => ({ ...prev, retrying: false, error: true }));
-          currentIntervalRef.current = Math.min(intervalMs * backoffFactor, intervalMs * 4);
-        }
-      });
-  };
+export function usePoll<T>({ fetchFn, queryKey, initial, intervalMs = 5000, timeoutMs = 10_000 }: Options<T>): PollResult<T> {
+  const firstKey = useRef(queryKey);
+  const lastKey = useRef(queryKey);
+  const [snap, setSnap] = useState<Snapshot<T> | null>(null);
+  const [failing, setFailing] = useState<{ key: string; health: Health }>({ key: queryKey, health: INITIAL_HEALTH });
 
   useEffect(() => {
-    if (state.sessionEnded) return;
+    const queryChanged = lastKey.current !== queryKey;
+    lastKey.current = queryKey;
 
-    const scheduleNext = () => {
-      if (state.sessionEnded) return;
-      timerRef.current = setTimeout(() => {
-        poll.current();
-        scheduleNext();
-      }, currentIntervalRef.current);
+    let cancelled = false;
+    let inflight = false;
+    let health = INITIAL_HEALTH;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | undefined;
+    const visible = () => document.visibilityState === "visible";
+
+    const schedule = (ms: number) => {
+      clearTimeout(timer);
+      if (cancelled || health.sessionEnded || !visible()) return;
+      timer = setTimeout(() => void poll(), ms);
     };
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible" && !state.sessionEnded) {
-        poll.current(); // immediate poll when tab becomes visible
+    const poll = async () => {
+      clearTimeout(timer);
+      if (cancelled || inflight || health.sessionEnded || !visible()) return;
+      inflight = true;
+      const own = new AbortController();
+      controller = own;
+      const abortTimer = setTimeout(() => own.abort(), timeoutMs);
+      try {
+        const data = await fetchFn(own.signal);
+        if (cancelled) return;
+        health = afterSuccess();
+        setSnap({ key: queryKey, data, health });
+        setFailing({ key: queryKey, health });
+      } catch (error) {
+        if (cancelled) return;
+        health = afterFailure(health, error);
+        setFailing({ key: queryKey, health });
+      } finally {
+        clearTimeout(abortTimer);
+        inflight = false;
       }
+      if (!cancelled) schedule(nextDelayMs(intervalMs, health));
     };
 
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+    const onVisibility = () => {
+      if (!visible()) clearTimeout(timer);
+      else void poll();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
 
-    if (!skipInitialPoll) poll.current();
-    scheduleNext();
+    if (queryChanged) void poll();
+    else schedule(intervalMs);
 
     return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      if (timerRef.current) clearTimeout(timerRef.current);
+      cancelled = true;
+      clearTimeout(timer);
+      controller?.abort();
+      document.removeEventListener("visibilitychange", onVisibility);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchFn, intervalMs, state.sessionEnded]);
+  }, [fetchFn, queryKey, intervalMs, timeoutMs]);
 
-  return state;
+  const data = snap && snap.key === queryKey ? snap.data : queryKey === firstKey.current ? initial : null;
+  const health = failing.key === queryKey ? failing.health : INITIAL_HEALTH;
+  return { data, state: feedState(health) };
 }

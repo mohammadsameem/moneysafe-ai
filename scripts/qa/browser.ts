@@ -3,6 +3,11 @@
  * through the signed-in app at a phone width (375 px) and a desktop width (1280 px).
  *
  *   npm run qa:browser            (the dev server must be running, DEMO_MODE=true)
+ *   QA_SECTIONS=pages,feed npm run qa:browser   (only some sections; ids: start, pages, hero, tabs, reset, missing, feed,
+ *                                                feedvisible, feedfaults). Each section has a hard limit (QA_SECTION_MS, default
+ *                                                90 s); a section that hangs prints its last step, the requests still open and the
+ *                                                last 20 page events, fails, and the run continues on a fresh tab.
+ *   QA_TIMING=1                   prints how long every page load and settle took.
  *
  * It signs in through the real login form, clicks real buttons (Start demo, Restart my demo,
  * Approve, Simulate outcome, Approve change, the Reset dialog, the mobile tabs), and audits every
@@ -18,7 +23,14 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { seedId } from "../../src/seed/ids";
-import { BASE, check, cleanup, closeDb, finish, getSql, guardLocalOnly, info, noteFailure, sleep, waitForResetCooldown } from "./common";
+import { BASE, check as rawCheck, cleanup, closeDb, finish, getSql, guardLocalOnly, info, noteFailure, sleep, waitForResetCooldown } from "./common";
+
+/** The last thing the script did or checked: a hang report names it. */
+let lastStep = "(nothing yet)";
+const check = (name: string, ok: boolean, extra = ""): boolean => {
+  lastStep = `${ok ? "PASS" : "FAIL"}  ${name}`;
+  return rawCheck(name, ok, extra);
+};
 
 const OUT = join(process.cwd(), ".qa", "screens");
 const PORT = Number(process.env.QA_CDP_PORT ?? 9333);
@@ -33,7 +45,10 @@ class Cdp {
   private waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private listeners: Array<(method: string, params: Params) => void> = [];
 
+  private closed = false;
+
   private constructor(private ws: WebSocket) {
+    ws.addEventListener("close", () => this.failAll("the browser connection closed"));
     ws.addEventListener("message", (event) => {
       const msg = JSON.parse(String(event.data)) as { id?: number; result?: unknown; error?: { message: string }; method?: string; params?: Params };
       if (msg.id !== undefined) {
@@ -57,12 +72,28 @@ class Cdp {
     return new Cdp(ws);
   }
 
-  send<T = Params>(method: string, params: Params = {}): Promise<T> {
+  /** Every command has a deadline: a hung browser call fails with its name instead of stalling the whole run. */
+  send<T = Params>(method: string, params: Params = {}, timeoutMs = 20_000): Promise<T> {
+    if (this.closed) return Promise.reject(new Error(`${method}: the browser connection is closed`));
     const id = ++this.id;
     return new Promise<T>((resolve, reject) => {
-      this.waiting.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      const timer = setTimeout(() => {
+        this.waiting.delete(id);
+        reject(new Error(`CDP ${method} did not answer within ${timeoutMs} ms`));
+      }, timeoutMs);
+      this.waiting.set(id, {
+        resolve: (v) => (clearTimeout(timer), resolve(v as T)),
+        reject: (e) => (clearTimeout(timer), reject(e)),
+      });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
+  }
+
+  private failAll(reason: string): void {
+    this.closed = true;
+    const pending = Array.from(this.waiting.values());
+    this.waiting.clear();
+    for (const w of pending) w.reject(new Error(reason));
   }
 
   onEvent(fn: (method: string, params: Params) => void): void {
@@ -70,6 +101,7 @@ class Cdp {
   }
 
   close(): void {
+    this.failAll("the page connection was closed");
     this.ws.close();
   }
 }
@@ -95,6 +127,12 @@ interface Viewport {
   height: number;
 }
 
+/**
+ * Requests that look like ours but never reach the dev server (they are absent from its log): `/<GUID>/<GUID>/from?get&nocache=`
+ * fires twice a second in this browser. They are kept out of the hang report so they do not bury the real events.
+ */
+const NOISE = /^\/[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}/; // upper-case GUID at the root; none of our routes look like that
+
 /** One network request the page made, as the browser saw it. */
 interface NetRequest {
   id: string;
@@ -116,47 +154,94 @@ class Page {
   /** Every request since the last clearNet(), in order. */
   net: NetRequest[] = [];
   private byId = new Map<string, NetRequest>();
-  private inflight = 0;
+
+  /**
+   * Requests that are the page still loading: started, not finished, younger than 4 s, and ours. Computed from the request
+   * list each time rather than kept as a counter, because a counter drifts (a redirect, a request that never reports back, or
+   * traffic injected from outside the page each left it above zero and made every settle() wait out its whole cap).
+   */
+  private busy(): number {
+    const now = Date.now();
+    return this.net.filter((r) => r.durationMs === undefined && !r.failed && !NOISE.test(r.url) && now - r.startedAt < 4000).length;
+  }
   private viewport: Viewport = { name: "desktop", width: 1280, height: 800 };
+
+  /** The last 20 things the page did (requests, responses, failures, console errors, navigations), for hang reports. */
+  private recent: string[] = [];
+  private loadWaiter: (() => void) | null = null;
+  private log(line: string): void {
+    this.recent.push(`${new Date().toISOString().slice(11, 23)} ${line}`);
+    if (this.recent.length > 20) this.recent.shift();
+  }
+  lastEvents(): string[] {
+    return [...this.recent];
+  }
+  /** Requests started but not finished right now, oldest first. */
+  openRequests(): string[] {
+    return this.net.filter((r) => r.durationMs === undefined).map((r) => `${r.method} ${r.url} (${Date.now() - r.startedAt} ms so far)`);
+  }
 
   constructor(private cdp: Cdp) {
     cdp.onEvent((method, params) => {
+      this.lastEventAt = Date.now();
+      if (method === "Page.loadEventFired") {
+        this.loadedAt = Date.now();
+        this.log("load event");
+        this.loadWaiter?.();
+      } else if (method === "Page.frameNavigated") {
+        const frame = (params.frame ?? {}) as { url?: string; parentId?: string };
+        if (!frame.parentId) this.log(`navigated to ${new URL(frame.url ?? "http://x/", BASE).pathname}`);
+      }
       if (method === "Network.requestWillBeSent") {
-        this.inflight++;
+        // A redirect re-announces the same request id: the first leg is finished, a new one starts.
+        if (params.redirectResponse) {
+          const before = this.byId.get(String(params.requestId));
+          if (before) before.durationMs = Date.now() - before.startedAt;
+        }
         const req = (params.request ?? {}) as { url?: string; method?: string };
         const url = new URL(req.url ?? "http://x/", BASE);
         const entry: NetRequest = { id: String(params.requestId), method: req.method ?? "GET", url: `${url.pathname}${url.search}`, startedAt: Date.now() };
         this.byId.set(entry.id, entry);
         this.net.push(entry);
+        if (!NOISE.test(entry.url)) this.log(`-> ${entry.method} ${entry.url}`);
       } else if (method === "Network.responseReceived") {
         const entry = this.byId.get(String(params.requestId));
-        if (entry) entry.status = Number(((params.response ?? {}) as { status?: number }).status);
+        if (entry) {
+          entry.status = Number(((params.response ?? {}) as { status?: number }).status);
+          if (!NOISE.test(entry.url)) this.log(`<- ${entry.status} ${entry.url}`);
+        }
       } else if (method === "Network.loadingFinished") {
-        this.inflight = Math.max(0, this.inflight - 1);
         const entry = this.byId.get(String(params.requestId));
         if (entry) entry.durationMs = Date.now() - entry.startedAt;
       } else if (method === "Network.loadingFailed") {
-        this.inflight = Math.max(0, this.inflight - 1);
         const entry = this.byId.get(String(params.requestId));
         if (entry) {
           entry.durationMs = Date.now() - entry.startedAt;
           entry.failed = `${String(params.errorText ?? "failed")}${params.canceled ? " (cancelled)" : ""}`;
+          this.log(`!! ${entry.url} ${entry.failed}`);
         }
       } else if (method === "Runtime.exceptionThrown") {
         const d = (params.exceptionDetails ?? {}) as { text?: string; exception?: { description?: string } };
         this.consoleErrors.push(`exception: ${(d.exception?.description ?? d.text ?? "").split("\n")[0]}`);
+        this.log(this.consoleErrors[this.consoleErrors.length - 1]);
       } else if (method === "Runtime.consoleAPICalled" && params.type === "error") {
         const args = (params.args ?? []) as Array<{ value?: unknown; description?: string }>;
         this.consoleErrors.push(`console.error: ${args.map((a) => String(a.value ?? a.description ?? "")).join(" ").slice(0, 200)}`);
+        this.log(this.consoleErrors[this.consoleErrors.length - 1]);
       } else if (method === "Log.entryAdded") {
         const e = (params.entry ?? {}) as { level?: string; text?: string; url?: string };
-        if (e.level === "error") this.consoleErrors.push(`log: ${e.text ?? ""} ${e.url ?? ""}`.slice(0, 200));
+        if (e.level === "error") {
+          this.consoleErrors.push(`log: ${e.text ?? ""} ${e.url ?? ""}`.slice(0, 200));
+          this.log(this.consoleErrors[this.consoleErrors.length - 1]);
+        }
       }
     });
   }
 
   async init(): Promise<void> {
     for (const domain of ["Page", "Runtime", "Network", "Log"]) await this.cdp.send(`${domain}.enable`);
+    // Several tabs are open at once in the feed section: make each one behave as the focused, visible tab.
+    await this.cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => undefined);
   }
 
   async setViewport(v: Viewport): Promise<void> {
@@ -180,25 +265,36 @@ class Page {
     const end = Date.now() + maxMs;
     let quietSince = Date.now();
     while (Date.now() < end) {
-      if (this.inflight > 0) quietSince = Date.now();
+      if (this.busy() > 0) quietSince = Date.now();
       else if (Date.now() - quietSince > 700) break;
       await sleep(100);
     }
-    await this.eval<void>("new Promise((r) => requestAnimationFrame(() => setTimeout(r, 250)))");
+    // requestAnimationFrame can be paused for a tab the browser thinks is in the background: never wait on it alone.
+    await this.eval<void>("new Promise((r) => { const t = setTimeout(r, 600); requestAnimationFrame(() => { clearTimeout(t); setTimeout(r, 250); }); })");
   }
 
   async goto(path: string): Promise<void> {
-    let loaded: () => void = () => undefined;
-    const done = new Promise<void>((resolve) => (loaded = resolve));
-    this.cdp.onEvent((method) => {
-      if (method === "Page.loadEventFired") loaded();
-    });
+    lastStep = `doing: load ${path}`;
+    const t0 = Date.now();
+    const done = new Promise<void>((resolve) => (this.loadWaiter = resolve));
     await this.cdp.send("Page.navigate", { url: `${BASE}${path}` });
-    await Promise.race([done, sleep(45_000)]);
+    const loaded = await Promise.race([done.then(() => true), sleep(45_000).then(() => false)]);
+    this.loadWaiter = null;
+    if (!loaded) this.log("no load event within 45 s");
+    const t1 = Date.now();
     await this.settle();
+    this.log(`goto ${path}: load ${t1 - t0} ms, settle ${Date.now() - t1} ms`);
+    if (process.env.QA_TIMING) console.log(`   [timing] goto ${path}: load ${t1 - t0} ms, settle ${Date.now() - t1} ms`);
   }
 
+  /** Milliseconds since the page last reported anything. */
+  quietForMs(): number {
+    return Date.now() - this.lastEventAt;
+  }
+  private lastEventAt = Date.now();
+
   async waitFor(expression: string, timeoutMs = 15_000): Promise<boolean> {
+    lastStep = `doing: wait for ${expression.slice(0, 90)}`;
     const end = Date.now() + timeoutMs;
     while (Date.now() < end) {
       try {
@@ -213,6 +309,7 @@ class Page {
 
   /** A real mouse click at the centre of the first visible matching element. */
   async click(selector: string, text?: string): Promise<boolean> {
+    lastStep = `doing: click ${selector} "${text ?? ""}"`;
     const pos = await this.eval<{ x: number; y: number } | null>(
       `(() => { ${FIND} const el = find(${JSON.stringify(selector)}, ${JSON.stringify(text ?? "")}); if (!el) return null; el.scrollIntoView({ block: 'center', inline: 'center' }); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`,
     );
@@ -284,11 +381,20 @@ class Page {
   /** Requests to the activity endpoint since the last clearNet(). */
   activityPolls = (): NetRequest[] => this.net.filter((r) => r.url.startsWith("/api/activity"));
 
+  /** Activity requests that started within `ms` of the page's load event (or before it). */
+  activityPollsNearLoad = (ms: number): NetRequest[] => this.activityPolls().filter((r) => r.startedAt - this.loadedAt < ms);
+  private loadedAt = 0;
+
+  /** Polls that went wrong: failed, answered with a non-2xx status, or still unanswered after 5 s. One still in flight is fine. */
+  badPolls = (): NetRequest[] =>
+    this.activityPolls().filter((r) => r.failed || (r.status !== undefined && (r.status < 200 || r.status >= 300)) || (r.status === undefined && Date.now() - r.startedAt > 5000));
+
   pathname = (): Promise<string> => this.eval<string>("location.pathname");
   text = (): Promise<string> => this.eval<string>("document.body.innerText");
   toasts = (): Promise<string> => this.eval<string>(`(document.querySelector('[aria-label="Notifications"]') || {}).innerText || ''`);
 
   async shot(name: string): Promise<void> {
+    lastStep = `doing: screenshot ${name}`;
     mkdirSync(OUT, { recursive: true });
     const m = await this.cdp.send<{ cssContentSize?: { height: number }; contentSize: { height: number } }>("Page.getLayoutMetrics");
     const height = Math.min(Math.ceil((m.cssContentSize ?? m.contentSize).height), 7000);
@@ -385,15 +491,33 @@ async function launch(browser: string, profile: string): Promise<ChildProcess> {
   throw new Error("the browser did not start");
 }
 
-async function openPage(): Promise<{ cdp: Cdp; page: Page }> {
+interface Opened {
+  cdp: Cdp;
+  page: Page;
+  targetId: string;
+}
+
+interface Section {
+  id: string;
+  title: string;
+  run: (page: Page) => Promise<void>;
+}
+
+async function openPage(): Promise<Opened> {
   const url = `http://127.0.0.1:${PORT}/json/new?about:blank`;
   let res = await fetch(url, { method: "PUT" });
   if (!res.ok) res = await fetch(url);
-  const target = (await res.json()) as { webSocketDebuggerUrl: string };
+  const target = (await res.json()) as { id: string; webSocketDebuggerUrl: string };
   const cdp = await Cdp.connect(target.webSocketDebuggerUrl);
   const page = new Page(cdp);
   await page.init();
-  return { cdp, page };
+  return { cdp, page, targetId: target.id };
+}
+
+/** Close a tab for real (dropping the connection alone leaves the tab, and its timers, running). */
+async function closePage(o: Opened): Promise<void> {
+  o.cdp.close();
+  await fetch(`http://127.0.0.1:${PORT}/json/close/${o.targetId}`).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -444,7 +568,7 @@ async function main(): Promise<void> {
     const opened = await openPage();
     cdp = opened.cdp;
     const page = opened.page;
-    const sql = getSql();
+    let currentTab = opened;
 
     // ---- 1. The real login form, on a phone ----------------------------------------------------------
     await page.setViewport(MOBILE);
@@ -593,7 +717,22 @@ async function main(): Promise<void> {
       return;
     }
 
-    // ---- 2. Dashboard, Start demo, on a phone --------------------------------------------------------
+    // ---- The sections ----------------------------------------------------------------------------------------------
+    // QA_SECTIONS=start,pages,hero,tabs,reset,missing,feed picks some; the default is all, in this order. Every section gets
+    // its own page object, has a hard time limit (QA_SECTION_MS, default 90 s) and, if it hangs, is abandoned on a fresh tab.
+    let C = "";
+    let E = "";
+    const loadCopies = async (pg: Page): Promise<void> => {
+      if (!(await pg.eval<string>("location.origin")).startsWith("http")) await pg.goto("/orders");
+      const copies = await pg.eval<Record<string, string>>(
+        "fetch('/api/demo/start', { method: 'POST' }).then((r) => r.json()).then((b) => Object.fromEntries(b.copies.map((c) => [c.seedDisputeId, c.disputeId])))",
+      );
+      C = copies[seedId("dispute", "SEED-C")] ?? "";
+      E = copies[seedId("dispute", "SEED-E")] ?? "";
+    };
+
+    const sections: Section[] = [
+      { id: "start", title: "Dashboard and Start demo (phone)", run: async (page) => {
     await page.goto("/");
     const dash = await page.text();
     check("Dashboard: both reset buttons and the Judge guide are there", dash.includes("Restart my demo") && dash.includes("Reset everything for all judges") && dash.includes("Judge guide"));
@@ -606,14 +745,28 @@ async function main(): Promise<void> {
     const inboxRows = await page.eval<number>(`document.querySelectorAll('tbody a[href^="/disputes/"]').length`);
     check("  ...which lists your three copies (3 rows, no 'Shared example' badge)", inboxRows === 3 && !inbox.includes("Shared example"), `${inboxRows} rows`);
 
-    const copies = await page.eval<Record<string, string>>(
-      "fetch('/api/demo/start', { method: 'POST' }).then((r) => r.json()).then((b) => Object.fromEntries(b.copies.map((c) => [c.seedDisputeId, c.disputeId])))",
-    );
-    const C = copies[seedId("dispute", "SEED-C")] ?? "";
-    const E = copies[seedId("dispute", "SEED-E")] ?? "";
+    await loadCopies(page);
     check("  ...a second Start demo returns the same three copies", C.length === 36 && E.length === 36);
 
-    // ---- 3. Every page at both widths, in the fresh-demo state (these are the screenshots) -----------------
+    // Risk distribution card (desktop, two columns): a note when orders are on Hold, and no empty area under the caption.
+    await page.setViewport(DESKTOP);
+    await page.goto("/");
+    const risk = await page.eval<{ hold: number; text: string; slack: number; stretch: number }>(`(async () => {
+      const d = await fetch('/api/dashboard').then((r) => r.json());
+      const card = document.querySelector('section[aria-labelledby="risk-heading"]');
+      const r = card.getBoundingClientRect();
+      const last = Array.from(card.children).filter((c) => c.getBoundingClientRect().height > 0).pop();
+      const pad = parseFloat(getComputedStyle(card).paddingBottom);
+      const sibling = card.parentElement.children[1];
+      return { hold: d.verdict_distribution.hold, text: card.innerText, slack: Math.round(r.bottom - pad - last.getBoundingClientRect().bottom), stretch: Math.round(sibling.getBoundingClientRect().height - r.height) };
+    })()`);
+    const expectNote = risk.hold > 0 ? new RegExp(`${risk.hold} orders? on Hold needs? attention`).test(risk.text.replace(/\s+/g, " ")) : !/on Hold/.test(risk.text);
+    check(`Risk distribution: the Hold note matches the data (${risk.hold} on Hold)`, expectNote, risk.text.replace(/\s+/g, " ").slice(-90));
+    check(`  ...and nothing empty under the caption (${risk.slack}px of slack; the activity card beside it is ${risk.stretch}px taller)`, risk.slack <= 2);
+      } },
+
+      { id: "pages", title: "Every page at 375, 768 and 1280 px", run: async (page) => {
+    await loadCopies(page);
     const pages: Array<[string, string, string, RegExp?]> = [
       ["Dashboard", "/", "dashboard", /Dashboard/],
       ["Orders", "/orders", "orders", /Orders/],
@@ -629,7 +782,10 @@ async function main(): Promise<void> {
       for (const [label, path, shot, h1] of pages) await auditPage(page, v, label, path, `${v.name}-${shot}`, h1);
     }
 
-    // ---- 4. The dispute hero is usable on a phone: approve, simulate the outcome ------------------------
+      } },
+
+      { id: "hero", title: "Dispute hero on a phone: approve, outcome, Dashboard and Insights move", run: async (page) => {
+    await loadCopies(page);
     await page.setViewport(MOBILE);
     await page.goto(`/disputes/${C}`);
     const hero = await page.text();
@@ -664,7 +820,10 @@ async function main(): Promise<void> {
     check("  ...the proposal card disappears and the first-time weight shows 23", await page.waitFor(`!document.body.innerText.includes('Proposed weight change') && /First-time buyer, high value\\s*(first_time_high_value\\s*)?23/.test(document.body.innerText)`));
     await page.shot("mobile-insights-after");
 
-    // ---- 6. Mobile tab bar -------------------------------------------------------------------------------------
+      } },
+
+      { id: "tabs", title: "Mobile tab bar", run: async (page) => {
+    await page.setViewport(MOBILE);
     await page.goto("/");
     const tabs = [["Orders", "/orders"], ["Disputes", "/disputes"], ["Insights", "/insights"], ["Agent Activity", "/activity"], ["Dashboard", "/"]] as const;
     for (const [label, href] of tabs) {
@@ -675,7 +834,10 @@ async function main(): Promise<void> {
       check(`bottom tab "${label}" goes to ${href} and is the only one marked current`, clicked && arrived && current === 1);
     }
 
-    // ---- 7. Restart my demo and the Reset dialog, on a desktop --------------------------------------------------
+      } },
+
+      { id: "reset", title: "Restart my demo and the global Reset dialog (desktop)", run: async (page) => {
+    const sql = getSql();
     await page.setViewport(DESKTOP);
     await page.goto("/");
     check("Restart my demo is clicked (no dialog)", await page.click("main button", "Restart my demo"));
@@ -706,7 +868,11 @@ async function main(): Promise<void> {
     const reset = await page.text();
     check("  ...the Dashboard is back to the seed ($320.00 under review, no simulated sub-label)", reset.includes("$320.00") && !reset.includes("from simulated outcomes"));
 
-    // ---- 8. A missing record -------------------------------------------------------------------------------------------
+      } },
+
+      { id: "missing", title: "A missing record is a real 404", run: async (page) => {
+    await page.setViewport(DESKTOP);
+    await page.goto("/orders");
     page.consoleErrors.length = 0;
     const status = await page.eval<number>("fetch('/disputes/00000000-0000-4000-8000-000000000000').then((r) => r.status)");
     check("a dispute that does not exist is a real 404", status === 404);
@@ -717,44 +883,162 @@ async function main(): Promise<void> {
     await page.goto("/disputes/00000000-0000-4000-8000-000000000000");
     check("  ...and on a phone it fits and keeps the tab bar", (await page.eval<Audit>(AUDIT)).overflowPx <= 0 && (await page.eval<Audit>(AUDIT)).bottomNav);
 
-    // ---- 9. Activity feed polling (robust, no persistent errors, tab visibility) -------------------------------------
-    await page.setViewport(DESKTOP);
-    const feedPages: Array<[string, string]> = [["/activity", "Agent Activity"], [`/disputes/${C}`, "Dispute detail"]];
-    for (const [path, label] of feedPages) {
-      page.clearNet();
-      await page.goto(path);
-      await sleep(8_000); // 8s is enough for ~2 polls at 5s intervals
-      const polls = page.activityPolls();
-      const bad = polls.filter((r) => r.status === undefined || r.status < 200 || r.status >= 300 || r.failed);
-      const line = await page.feedLine();
-      check(`${label}: after 8s, no "Could not refresh" and all polls 2xx`, !line.text.includes("Could not refresh") && bad.length === 0, bad.length ? `${bad.length} bad: ${bad.map((r) => `${r.url} -> ${r.failed ?? r.status}`).slice(0, 2).join(", ")}` : "");
+      } },
+
+      { id: "feed", title: "Activity feed: 15 s of polling on four pages at 375, 768 and 1280 px", run: async (page) => {
+    await loadCopies(page);
+    // Four tabs side by side so 15 s of polling costs 15 s per width, not 60.
+    const targets: Array<[string, string]> = [["/", "Dashboard"], ["/activity", "Agent Activity"], [`/orders/${seedId("order", "SEED-B")}`, "Order detail"], [`/disputes/${C}`, "Dispute detail"]];
+    const tabs: Array<{ label: string; path: string; o: Opened }> = [];
+    try {
+      for (const [path, label] of targets) tabs.push({ label, path, o: await openPage() });
+      for (const v of [MOBILE, TABLET, DESKTOP]) {
+        for (const t of tabs) {
+          await t.o.page.setViewport(v);
+          await t.o.page.goto(t.path);
+          t.o.page.clearNet();
+        }
+        await sleep(15_000);
+        for (const t of tabs) {
+          const polls = t.o.page.activityPolls();
+          const bad = t.o.page.badPolls();
+          const line = await t.o.page.feedLine();
+          const visible = await t.o.page.eval<string>("document.visibilityState");
+          const where = `${t.label} @ ${v.width}px`;
+          check(`${where}: tab is visible, so the feed really was polling`, visible === "visible", visible);
+          check(`${where}: after 15 s no "Could not refresh" (status line: "${line.text}")`, !/Could not refresh/.test(line.text) && line.state === "ok", `state=${line.state}`);
+          check(`${where}: every activity poll was 2xx (${polls.length} polls)`, bad.length === 0 && polls.length > 0, bad.map((r) => `${r.url} -> ${r.failed ?? r.status}`).slice(0, 2).join(", "));
+          check(`${where}: one poll per 5 s interval, not two (2 to 4 polls in ~15-20 s)`, polls.length >= 2 && polls.length <= 4, `${polls.length} polls at ${polls.map((p) => ((p.startedAt - polls[0].startedAt) / 1000).toFixed(1)).join("s, ")}s`);
+        }
+      }
+    } finally {
+      for (const t of tabs) await closePage(t.o);
     }
+      } },
 
-    // Tab visibility: hide for 8s, verify polls stop, then resume
-    await page.goto("/");
+      { id: "feedvisible", title: "Activity feed: no request at mount, pauses when the tab is hidden, resumes when visible", run: async (page) => {
+    await page.setViewport(DESKTOP);
+    const waitPolls = async (n: number, ms: number) => {
+      const end = Date.now() + ms;
+      while (Date.now() < end && page.activityPolls().length < n) await sleep(100);
+      return page.activityPolls().length;
+    };
+
+    // Mount: the server already rendered the entries, so a page load makes no activity request of its own (not even the
+    // second one React strict mode's double mount used to cause in development).
     page.clearNet();
-    await sleep(3_000);
-    const beforeHide = page.activityPolls().length;
-    await page.setTabVisible(false);
-    await sleep(8_000);
-    const duringHide = page.activityPolls().length - beforeHide;
-    await page.setTabVisible(true);
-    await sleep(6_000);
-    const afterShow = page.activityPolls().length - beforeHide - duringHide;
-    check("tab hidden for 8s: no polls while hidden, at least 1 after resume", duringHide === 0 && afterShow >= 1, `hidden=${duringHide}, after=${afterShow}`);
+    await page.goto("/");
+    const mountPolls = page.activityPollsNearLoad(4_500);
+    check("page load: no /api/activity request at mount (nothing within 4.5 s of the load event; the first poll is at 5 s)", mountPolls.length === 0, mountPolls.map((p) => p.url).join(" "));
 
-    // Single failed poll: verify quiet retry state clears on next success
+    // Hidden tab: no polls; visible again: a poll straight away, then the normal cadence.
+    const first = await waitPolls(1, 9_000);
+    check("the feed polls on its own (first poll seen)", first >= 1, `${first} polls`);
+    await page.setTabVisible(false);
+    await sleep(100);
+    const atHide = page.activityPolls().length;
+    await sleep(11_000); // more than two intervals
+    const duringHide = page.activityPolls().length - atHide;
+    check("tab hidden for 11 s: no poll started while hidden", duringHide === 0, `${duringHide} polls`);
+    await page.setTabVisible(true);
+    const resumed = await waitPolls(atHide + 1, 2_000);
+    check("  ...visible again: a poll starts within 2 s", resumed > atHide, `${resumed - atHide} polls`);
+    const next = await waitPolls(atHide + 2, 8_000);
+    check("  ...and the 5 s cadence continues", next >= atHide + 2, `${next - atHide} polls`);
+
+      } },
+
+      { id: "feedfaults", title: "Activity feed: quiet retry after one failed poll, filter change, session end", run: async (page) => {
+    await page.setViewport(DESKTOP);
+    const waitPolls = async (n: number, ms: number) => {
+      const end = Date.now() + ms;
+      while (Date.now() < end && page.activityPolls().length < n) await sleep(100);
+      return page.activityPolls().length;
+    };
+
+    // One failed poll: a quiet "Refresh delayed" state that clears on the next success.
     await page.goto("/");
     page.clearNet();
     await page.intercept("*/api/activity*", (_url, n) => (n === 1 ? { status: 500, body: '{"error":"boom"}' } : "continue"));
-    await sleep(3_000);
-    const retry = await page.feedLine();
-    check("single failed poll: shows quiet retry state", retry.state === "retrying" && retry.text.includes("Refresh delayed"));
-    await sleep(6_000);
-    const cleared = await page.feedLine();
+    const seen: string[] = [];
+    const watch = async (state: string, ms: number) => {
+      const end = Date.now() + ms;
+      while (Date.now() < end) {
+        const l = await page.feedLine();
+        if (seen[seen.length - 1] !== l.state) seen.push(String(l.state));
+        if (l.state === state) return l;
+        await sleep(150);
+      }
+      return await page.feedLine();
+    };
+    const retry = await watch("retrying", 12_000);
+    check("one failed poll (500): the feed shows the quiet 'Refresh delayed, retrying' state", retry.state === "retrying" && /Refresh delayed/.test(retry.text), `${retry.state}: ${retry.text}`);
+    check("  ...and not an error message", !/Could not refresh/.test(retry.text));
+    const back = await watch("ok", 12_000);
+    check("  ...which clears on the next successful poll", back.state === "ok" && /Updates every 5 seconds/.test(back.text), `states seen: ${seen.join(" > ")}`);
     await page.stopIntercepting();
-    check("  ...which clears on the next success", cleared.state === "ok" && cleared.text.includes("Updates every 5 seconds"));
 
+    // Changing a filter on /activity fetches the new query at once and never shows the old filter's rows under the new one.
+    await page.goto("/activity");
+    page.clearNet();
+    await page.eval<void>("(() => { const s = document.querySelectorAll('select')[0]; s.value = 'llm_call'; s.dispatchEvent(new Event('change', { bubbles: true })); })()");
+    const filtered = await waitPolls(1, 2_000);
+    check("filter set to AI: the new query is requested within 2 s (not after the next 5 s tick)", filtered >= 1 && page.activityPolls()[0]?.url.includes("stepType=llm_call") === true, page.activityPolls().map((p) => p.url).join(" "));
+    await sleep(800);
+    const rowSteps = await page.eval<string[]>("Array.from(document.querySelectorAll('section ul li summary .sr-only')).map((e) => (e.textContent || '').trim())");
+    check(`  ...and only AI rows are listed (${rowSteps.length} rows)`, rowSteps.every((s) => s === "AI step:"), Array.from(new Set(rowSteps)).join(", "));
+    const filterLine = await page.feedLine();
+    check("  ...and the status line is back to normal", filterLine.state === "ok", `${filterLine.state}`);
+
+    // The session ends (401): say so once and stop polling, instead of retrying for ever.
+    await page.goto("/");
+    page.clearNet();
+    await page.intercept("*/api/activity*", () => ({ status: 401, body: '{"error":"unauthorized"}' }));
+    const ended = await watch("session-ended", 12_000);
+    check("a 401 poll: the feed says 'Your session has ended'", ended.state === "session-ended" && /session has ended/.test(ended.text), `${ended.state}: ${ended.text}`);
+    const afterEnd = page.activityPolls().length;
+    await sleep(11_000);
+    check("  ...and stops polling (no more requests in 11 s)", page.activityPolls().length === afterEnd, `${page.activityPolls().length - afterEnd} more`);
+    await page.stopIntercepting();
+      } },
+    ];
+
+    // ---- run them -----------------------------------------------------------------------------------------------------
+    const wanted = (process.env.QA_SECTIONS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    const unknown = wanted.filter((w) => !sections.some((s) => s.id === w));
+    if (unknown.length) noteFailure(`QA_SECTIONS names unknown section(s): ${unknown.join(", ")}. Known: ${sections.map((s) => s.id).join(", ")}`);
+    let current = page;
+    for (const section of sections) {
+      if (wanted.length && !wanted.includes(section.id)) continue;
+      const limit = Number(process.env.QA_SECTION_MS ?? 90_000);
+      const t0 = Date.now();
+      console.log(`\n== ${section.id}: ${section.title}`);
+      lastStep = "(section starting)";
+      const body = section.run(current).then(() => "done" as const, (e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const outcome = await Promise.race([body, new Promise<"timeout">((resolve) => (timer = setTimeout(() => resolve("timeout"), limit)))]);
+      clearTimeout(timer);
+      if (outcome !== "done") {
+        const why = outcome === "timeout" ? `timed out after ${limit / 1000} s` : `stopped by an error: ${outcome.error.slice(0, 240)}`;
+        noteFailure(`section "${section.id}" ${why}`);
+        console.log(`   at ${new Date().toISOString().slice(11, 23)}; the page last reported anything ${(current.quietForMs() / 1000).toFixed(1)} s ago`);
+        console.log(`   last step:   ${lastStep}`);
+        console.log(`   open requests: ${current.openRequests().join(" | ") || "none"}`);
+        console.log(`   console errors: ${current.consoleErrors.slice(-3).join(" | ") || "none"}`);
+        console.log("   last 20 page events:");
+        for (const line of current.lastEvents()) console.log(`     ${line}`);
+        // Abandon the stuck tab: closing its connection fails everything it is waiting on, then carry on in a fresh tab.
+        await closePage(currentTab);
+        currentTab = await openPage();
+        cdp = currentTab.cdp;
+        current = currentTab.page;
+      } else {
+        // Leave no fault injection or hidden-tab override behind for the next section.
+        await current.stopIntercepting().catch(() => undefined);
+        await current.setTabVisible(true).catch(() => undefined);
+        console.log(`   (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+      }
+    }
     info(`screenshots written to ${OUT}`);
   } catch (err) {
     noteFailure(`unexpected error: ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}`);
