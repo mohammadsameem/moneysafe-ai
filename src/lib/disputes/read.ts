@@ -164,10 +164,14 @@ export async function listDisputeViews(sessionId: string, tab: DisputeTab, deps:
     : views.sort((a, b) => (b.resolvedAt ?? "").localeCompare(a.resolvedAt ?? "") || a.id.localeCompare(b.id));
 }
 
-export async function getDisputeView(id: string, sessionId: string, deps: DisputeReadDeps): Promise<{ view: DisputeView; order: Order } | null> {
+export async function getDisputeView(
+  id: string,
+  sessionId: string,
+  deps: DisputeReadDeps,
+): Promise<{ view: DisputeView; order: Order; dispute: Dispute } | null> {
   const now = (deps.now ?? (() => new Date()))();
   const record = await deps.repo.findVisible(id, sessionId);
   if (!record) return null;
   const live = isResolvedStatus(record.dispute.status) ? null : await liveDeadline(record, sessionId, deps);
-  return { view: toDisputeView(record, now, live ?? undefined), order: record.order };
+  return { view: toDisputeView(record, now, live ?? undefined), order: record.order, dispute: record.dispute };
 }

@@ -132,8 +132,17 @@ export interface ExecutionRepo {
   completeExecution(input: CompleteExecutionInput): Promise<CompleteExecutionResult>;
 }
 
+export interface ActionHistory {
+  /** Oldest first, approvals and rejections. */
+  approvals: ApprovalRecord[];
+  /** Oldest first. */
+  executions: ActionExecution[];
+}
+
 export interface ApprovalsRepo extends ExecutionRepo {
   findApprovedApproval(disputeId: string, actionType: DisputeActionType): Promise<ApprovalRecord | null>;
+  /** Every approval/rejection and execution for one dispute (for the timeline and the panel). */
+  getActionHistory(disputeId: string): Promise<ActionHistory>;
   /** Insert the approval and its (unexecuted) execution in ONE transaction. Throws ApprovalConflictError. */
   insertApprovalWithExecution(input: NewApprovalWithExecution): Promise<{ approval: ApprovalRecord; execution: ActionExecution }>;
   insertRejection(input: NewRejection): Promise<ApprovalRecord>;

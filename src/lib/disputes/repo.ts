@@ -2,7 +2,7 @@
  * Drizzle implementation of the disputes stores. Thin on purpose: every rule lives in the service
  * modules, which are tested against an in-memory fake with the same semantics.
  */
-import { and, eq, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
 import { getDb, type Db } from "@/db/client";
 import { errorCode } from "@/lib/activity/logger";
 import {
@@ -102,6 +102,14 @@ export function createDrizzleDisputesRepo(db: Db = getDb()): DisputesRepo {
     async getExecutionByApproval(approvalRecordId) {
       const rows = await db.select().from(actionExecutions).where(eq(actionExecutions.approvalRecordId, approvalRecordId)).limit(1);
       return rows[0] ?? null;
+    },
+
+    async getActionHistory(disputeId) {
+      const [approvals, executions] = await Promise.all([
+        db.select().from(approvalRecords).where(eq(approvalRecords.disputeId, disputeId)).orderBy(asc(approvalRecords.createdAt)),
+        db.select().from(actionExecutions).where(eq(actionExecutions.disputeId, disputeId)).orderBy(asc(actionExecutions.createdAt)),
+      ]);
+      return { approvals, executions };
     },
 
     async getActiveWeightsId() {

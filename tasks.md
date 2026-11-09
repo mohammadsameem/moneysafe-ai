@@ -483,12 +483,23 @@
 
 ### M2-07 · Dispute detail page (hero)
 
-- [ ] Auto-trigger `POST /api/disputes/[id]/analyze` on first load; loading state during analysis
-- [ ] `<RecommendationCard>`: badge (Contest / Refund), source tag, reasoning text
-- [ ] `<WinLikelihoodMeter>`: % bar, Strong/Moderate/Weak badge, source tag
-- [ ] Evidence used / gaps chips
-- [ ] `<ApprovalPanel>`: editable textarea (draft); Approve / Edit+Approve / Reject; idempotency notice; error + retry button on live write failure; `<SimulatedBadge>` in Demo Mode
-- [ ] LLM fallback state: system recommendation shown, no win likelihood meter, fallback note
+- [x] Auto-trigger `POST /api/disputes/[id]/analyze` on first load; loading state during analysis
+- [x] `<RecommendationCard>`: badge (Contest / Refund), source tag, reasoning text
+- [x] `<WinLikelihoodMeter>`: % bar, Strong/Moderate/Weak badge, source tag
+- [x] Evidence used / gaps chips
+- [x] `<ApprovalPanel>`: editable textarea (draft); Approve / Edit+Approve / Reject; idempotency notice; error + retry button on live write failure; `<SimulatedBadge>` in Demo Mode
+- [x] LLM fallback state: system recommendation shown, no win likelihood meter, fallback note
+
+
+> M2-07 notes (15 new tests; 622 in total):
+>
+> - **`/disputes/[id]`** (`src/app/(app)/disputes/[id]/page.tsx`, data from `src/lib/disputes/detail.ts`): header with reason, amount, live countdown (or the outcome for a resolved dispute), status, Demo data badge, order link and the buyer's message (rendered as plain text). Then `<RecommendationCard>`, `<WinLikelihoodMeter>`, `<EvidenceChips>` and `<ApprovalPanel>` (`src/components/disputes/`).
+> - **Auto-trigger:** only a dispute with NO stored analysis renders `<AnalysisTrigger>`, which calls `POST /analyze` once (guarded against React's double effect in dev), shows a skeleton, waits on a `202 in_progress`, then refreshes. A dispute that is already analysed, which includes every seed, renders its stored analysis on the server and makes no request at all.
+> - **RecommendationCard:** Contest / Refund badge, the source tag \"System recommendation\" or \"AI-adjusted recommendation\", the reasoning, and when the AI overrode the system, which way and why. **Fallback state:** \"AI unavailable \u2014 showing rule-based result.\" and no meter.
+> - **WinLikelihoodMeter:** \"Estimated win likelihood\", the percentage, Strong / Moderate / Weak in green / amber / red, a bar with `role=\"meter\"` and aria values, and \"System estimate\" or \"AI-adjusted estimate\" with the points moved.
+> - **ApprovalPanel:** the editable draft (read-only until **Edit**; \"Approve edited response\" when changed; a character count against PayPal's 2000), **Approve**, **Reject**; refunds have no draft and \"Approve refund\". A live (non-simulated) action asks for a confirmation first. States: decide (with \"you rejected this on ...\" if so), retry (explains it is safe, same request), done (\"Action already executed\", with the Simulated badge when simulated), resolved. Errors show PayPal's safe message and a Retry button. The server re-checks everything; the panel is only a front end.
+> - **Verified live** (dev server, real Supabase, signed in): SEED-C (95% Strong, Contest, draft textarea, Approve / Edit / Reject, `role=\"meter\"` with `aria-valuenow=\"95\"`), SEED-D (27% Weak, Refund, no textarea, \"Approve refund\"), SEED-E (44% Moderate, Contest, red countdown) all render with the stored analysis, the System recommendation tag, the Demo data and simulated notice and the evidence chips, and **opening all three spent no LLM budget and wrote no `llm_call` rows**; resolved H3 shows Lost and no approve buttons; unknown and malformed ids are 404. With temporary rows: an unanalysed dispute renders the analysing state and rendering it does not analyse; an AI-fallback dispute shows the note and no meter; an AI-adjusted one shows the tag, the override and \"-10 pts\"; a retry state shows Retry; after a real API approval the page shows \"Action already executed\" with the Simulated badge.
+> - **Not verified:** clicking in a real browser (the auto-trigger POST, Edit, the confirmation step, router refresh after approve). The client logic is exercised only through the same API calls made by script.
 
 ---
 

@@ -5,10 +5,20 @@ import { getCostAssumptions, isDemoModeEnabled } from "@/lib/env";
 import { getPayPalClient } from "@/lib/paypal";
 import type { AnalyzeDeps } from "./analyze";
 import type { ApproveDeps } from "./approve";
+import type { DetailDeps } from "./detail";
 import type { DisputeReadDeps } from "./read";
 import { createDrizzleDisputesRepo } from "./repo";
 
 export function buildReadDeps(): DisputeReadDeps {
+  return {
+    repo: createDrizzleDisputesRepo(),
+    paypal: getPayPalClient(),
+    demoMode: isDemoModeEnabled(),
+    log: logActivity,
+  };
+}
+
+export function buildDetailDeps(): DetailDeps {
   return {
     repo: createDrizzleDisputesRepo(),
     paypal: getPayPalClient(),

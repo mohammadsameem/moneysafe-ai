@@ -268,6 +268,9 @@ export function createFakeDisputesRepo(records: DisputeRecord[], artefacts: Evid
     async getExecutionByApproval(approvalRecordId) {
       return executions.find((e) => e.approvalRecordId === approvalRecordId) ?? null;
     },
+    async getActionHistory(disputeId) {
+      return { approvals: approvals.filter((a) => a.disputeId === disputeId), executions: executions.filter((e) => e.disputeId === disputeId) };
+    },
     async getActiveWeightsId() {
       return "active-weights-id";
     },
