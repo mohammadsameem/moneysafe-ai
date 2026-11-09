@@ -44,18 +44,49 @@ export function trackingStatuses(artefacts: readonly ArtefactInput[]): string[] 
   return statuses;
 }
 
-/** Evidence completeness score, 0-100. */
-export function computeEvidenceCompleteness(artefacts: readonly ArtefactInput[]): number {
+export type CompletenessCriterion = keyof typeof COMPLETENESS_POINTS;
+
+export const CRITERION_LABEL: Readonly<Record<CompletenessCriterion, string>> = Object.freeze({
+  invoice_summary: "Invoice / order summary",
+  line_items: "Order line items",
+  buyer_contact: "Buyer contact details",
+  tracking_info: "Tracking number + carrier",
+  tracking_events_present: "Tracking scan events present",
+  tracking_delivered: "Scan events include \"Delivered\"",
+  buyer_communication: "Buyer communications",
+});
+
+export interface CompletenessItem {
+  criterion: CompletenessCriterion;
+  label: string;
+  met: boolean;
+  points: number;
+  max: number;
+}
+
+/** Each criterion of REQ-EV-02, in order, with whether it is met. The tracking artefact is split in two. */
+export function completenessBreakdown(artefacts: readonly ArtefactInput[]): CompletenessItem[] {
   const has = (type: string) => artefacts.some((a) => a.artefactType === type);
   const statuses = trackingStatuses(artefacts);
-  const p = COMPLETENESS_POINTS;
-  return (
-    (has("invoice_summary") ? p.invoice_summary : 0) +
-    (has("line_items") ? p.line_items : 0) +
-    (has("buyer_contact") ? p.buyer_contact : 0) +
-    (has("tracking_info") ? p.tracking_info : 0) +
-    (statuses.length > 0 ? p.tracking_events_present : 0) +
-    (statuses.includes(DELIVERED_STATUS) ? p.tracking_delivered : 0) +
-    (has("buyer_communication") ? p.buyer_communication : 0)
-  );
+  const met: Record<CompletenessCriterion, boolean> = {
+    invoice_summary: has("invoice_summary"),
+    line_items: has("line_items"),
+    buyer_contact: has("buyer_contact"),
+    tracking_info: has("tracking_info"),
+    tracking_events_present: statuses.length > 0,
+    tracking_delivered: statuses.includes(DELIVERED_STATUS),
+    buyer_communication: has("buyer_communication"),
+  };
+  return (Object.keys(COMPLETENESS_POINTS) as CompletenessCriterion[]).map((criterion) => ({
+    criterion,
+    label: CRITERION_LABEL[criterion],
+    met: met[criterion],
+    points: met[criterion] ? COMPLETENESS_POINTS[criterion] : 0,
+    max: COMPLETENESS_POINTS[criterion],
+  }));
+}
+
+/** Evidence completeness score, 0-100. */
+export function computeEvidenceCompleteness(artefacts: readonly ArtefactInput[]): number {
+  return completenessBreakdown(artefacts).reduce((sum, item) => sum + item.points, 0);
 }

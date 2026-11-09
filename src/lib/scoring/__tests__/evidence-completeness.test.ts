@@ -19,3 +19,27 @@ describe("computeEvidenceCompleteness", () => {
     expect(computeEvidenceCompleteness([])).toBe(0);
   });
 });
+
+describe("completenessBreakdown", () => {
+  it("lists the seven REQ-EV-02 criteria in order, with the tracking artefact split in two, summing to 100", async () => {
+    const { completenessBreakdown, COMPLETENESS_POINTS } = await import("../evidence-completeness");
+    const items = completenessBreakdown([]);
+    expect(items.map((i) => i.criterion)).toEqual([
+      "invoice_summary", "line_items", "buyer_contact", "tracking_info", "tracking_events_present", "tracking_delivered", "buyer_communication",
+    ]);
+    expect(items.reduce((s, i) => s + i.max, 0)).toBe(100);
+    expect(items.every((i) => !i.met && i.points === 0)).toBe(true);
+    expect(Object.values(COMPLETENESS_POINTS).reduce((a, b) => a + b, 0)).toBe(100);
+  });
+
+  it("agrees with computeEvidenceCompleteness for every fixture", async () => {
+    const { completenessBreakdown } = await import("../evidence-completeness");
+    const { FOUR_BASICS, FULL_DELIVERED, FULL_IN_TRANSIT, FULL_NO_EVENTS, SEED_E_EVIDENCE } = await import("./fixtures");
+    for (const set of [[], FOUR_BASICS, FULL_DELIVERED, FULL_IN_TRANSIT, FULL_NO_EVENTS, SEED_E_EVIDENCE]) {
+      expect(completenessBreakdown(set).reduce((s, i) => s + i.points, 0)).toBe(computeEvidenceCompleteness(set));
+    }
+    const transit = completenessBreakdown(FULL_IN_TRANSIT);
+    expect(transit.find((i) => i.criterion === "tracking_events_present")?.met).toBe(true);
+    expect(transit.find((i) => i.criterion === "tracking_delivered")?.met).toBe(false);
+  });
+});
