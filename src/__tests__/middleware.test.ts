@@ -30,7 +30,7 @@ describe("middleware: API session protection", () => {
     },
   );
 
-  it.each(["/api/orders", "/api/orders/paypal-return?token=ABC", "/api/orders/paypal-cancel", "/api/anything-else"])(
+  it.each(["/api/orders", "/api/orders/22222222-2222-4222-8222-222222222222", "/api/anything-else"])(
     "returns 401 JSON for %s without a session",
     async (path) => {
       getToken.mockResolvedValue(null);
@@ -40,6 +40,37 @@ describe("middleware: API session protection", () => {
       expect(await res.json()).toEqual({ error: "unauthorized" });
     },
   );
+
+  it.each([
+    "/api/orders/paypal-return?token=ABC&PayerID=XYZ",
+    "/api/orders/paypal-return",
+    "/api/orders/paypal-cancel?token=ABC",
+    "/api/orders/paypal-cancel/",
+  ])("redirects (302) %s to /login without a session, instead of returning JSON", async (path) => {
+    getToken.mockResolvedValue(null);
+    const res = await middleware(request(path));
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://moneysafe.test/login");
+    expect(res.headers.get("content-type") ?? "").not.toContain("application/json");
+  });
+
+  it("also redirects those routes when the token has no usable session id", async () => {
+    getToken.mockResolvedValue({ sub: "demo-merchant" });
+    expect((await middleware(request("/api/orders/paypal-return?token=ABC"))).status).toBe(302);
+  });
+
+  it("only those two routes redirect: look-alikes and sub-paths still get 401 JSON", async () => {
+    getToken.mockResolvedValue(null);
+    for (const path of ["/api/orders/paypal-return/extra", "/api/orders/paypal-returnx", "/api/orders/PAYPAL-RETURN", "/api/orders/paypal-return-x/cancel"]) {
+      expect((await middleware(request(path))).status, path).toBe(401);
+    }
+  });
+
+  it("lets those two routes through with a valid session", async () => {
+    getToken.mockResolvedValue({ sid: "sid-1" });
+    expect(passedThrough(await middleware(request("/api/orders/paypal-return?token=ABC")))).toBe(true);
+    expect(passedThrough(await middleware(request("/api/orders/paypal-cancel?token=ABC")))).toBe(true);
+  });
 
   it("lets a request with a valid session (one that carries a session id) through", async () => {
     getToken.mockResolvedValue({ sid: "sid-1", sub: "demo-merchant" });

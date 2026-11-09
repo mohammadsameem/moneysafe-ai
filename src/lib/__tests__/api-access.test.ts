@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isOpenApiPath } from "../api-access";
+import { isBrowserRedirectPath, isOpenApiPath } from "../api-access";
 import { sessionCookieName, shouldUseSecureCookies } from "../session-cookie";
 
 describe("isOpenApiPath", () => {
@@ -23,6 +23,20 @@ describe("isOpenApiPath", () => {
     "/",
     "/api//demo/status",
   ])("requires a session for %s", (path) => expect(isOpenApiPath(path)).toBe(false));
+});
+
+describe("isBrowserRedirectPath", () => {
+  it.each(["/api/orders/paypal-return", "/api/orders/paypal-cancel", "/api/orders/paypal-return/"])("is true for %s", (p) =>
+    expect(isBrowserRedirectPath(p)).toBe(true),
+  );
+  it.each(["/api/orders", "/api/orders/paypal-return/x", "/api/orders/paypal-returnx", "/api/orders/Paypal-Return", "/api/demo/status", "/login"])(
+    "is false for %s",
+    (p) => expect(isBrowserRedirectPath(p)).toBe(false),
+  );
+  it("does not make them open: they still need a session", () => {
+    expect(isOpenApiPath("/api/orders/paypal-return")).toBe(false);
+    expect(isOpenApiPath("/api/orders/paypal-cancel")).toBe(false);
+  });
 });
 
 describe("session cookie naming", () => {

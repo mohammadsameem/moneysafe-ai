@@ -7,7 +7,7 @@
  */
 import { getToken } from "next-auth/jwt";
 import { NextResponse, type NextRequest } from "next/server";
-import { isOpenApiPath } from "@/lib/api-access";
+import { isBrowserRedirectPath, isOpenApiPath } from "@/lib/api-access";
 import { sessionCookieName } from "@/lib/session-cookie";
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
@@ -20,6 +20,10 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   });
   // A real sign-in always stamps a session id; a token without one is not one of ours.
   if (!token || typeof token.sid !== "string" || token.sid === "") {
+    // PayPal's return/cancel redirects are browser navigations: send the person to the login page.
+    if (isBrowserRedirectPath(request.nextUrl.pathname)) {
+      return NextResponse.redirect(new URL("/login", request.url), 302);
+    }
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   return NextResponse.next();
