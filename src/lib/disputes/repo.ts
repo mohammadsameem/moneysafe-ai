@@ -2,17 +2,36 @@
  * Drizzle implementation of the disputes stores. Thin on purpose: every rule lives in the service
  * modules, which are tested against an in-memory fake with the same semantics.
  */
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { getDb, type Db } from "@/db/client";
-import { disputes, evidenceArtefacts, orders } from "@/db/schema";
+import { errorCode } from "@/lib/activity/logger";
+import {
+  actionExecutions,
+  approvalRecords,
+  disputeOutcomes,
+  disputes,
+  evidenceArtefacts,
+  orders,
+  signalWeights,
+} from "@/db/schema";
 import { isUuid } from "@/lib/orders/queries";
-import type { AnalysisPatch, DisputeRecord, DisputesAnalysisRepo } from "./types";
+import {
+  ApprovalConflictError,
+  type AnalysisPatch,
+  type CompleteExecutionResult,
+  type DisputeRecord,
+  type DisputesRepo,
+} from "./types";
 
-export function createDrizzleDisputesRepo(db: Db = getDb()): DisputesAnalysisRepo {
+/** Postgres error code for a unique-constraint violation. */
+const UNIQUE_VIOLATION = "23505";
+
+export function createDrizzleDisputesRepo(db: Db = getDb()): DisputesRepo {
   const joined = () => db.select({ dispute: disputes, order: orders }).from(disputes).innerJoin(orders, eq(disputes.orderId, orders.id));
   const visible = (sessionId: string) => or(eq(disputes.isSeed, true), eq(disputes.sessionId, sessionId));
 
   return {
+    // ---- reads ---------------------------------------------------------------
     async listVisible(sessionId) {
       const rows: DisputeRecord[] = await joined().where(visible(sessionId));
       return rows;
@@ -24,6 +43,7 @@ export function createDrizzleDisputesRepo(db: Db = getDb()): DisputesAnalysisRep
     },
     getArtefacts: (orderId) => db.select().from(evidenceArtefacts).where(eq(evidenceArtefacts.orderId, orderId)),
 
+    // ---- analysis ------------------------------------------------------------
     async saveAnalysis(id, patch: AnalysisPatch) {
       const rows = await db
         .update(disputes)
@@ -31,6 +51,124 @@ export function createDrizzleDisputesRepo(db: Db = getDb()): DisputesAnalysisRep
         .where(and(eq(disputes.id, id), isNull(disputes.analysisComputedAt)))
         .returning();
       return rows[0] ?? null;
+    },
+
+    // ---- approvals and executions -----------------------------------------------
+    async findApprovalById(id) {
+      if (!isUuid(id)) return null;
+      const rows = await db.select().from(approvalRecords).where(eq(approvalRecords.id, id)).limit(1);
+      return rows[0] ?? null;
+    },
+
+    async findApprovedApproval(disputeId, actionType) {
+      const rows = await db
+        .select()
+        .from(approvalRecords)
+        .where(and(eq(approvalRecords.disputeId, disputeId), eq(approvalRecords.actionType, actionType), eq(approvalRecords.decision, "approved")))
+        .limit(1);
+      return rows[0] ?? null;
+    },
+
+    async getExecutionByApproval(approvalRecordId) {
+      const rows = await db.select().from(actionExecutions).where(eq(actionExecutions.approvalRecordId, approvalRecordId)).limit(1);
+      return rows[0] ?? null;
+    },
+
+    async getActiveWeightsId() {
+      const rows = await db.select({ id: signalWeights.id }).from(signalWeights).where(eq(signalWeights.isActive, true)).limit(1);
+      return rows[0]?.id ?? null;
+    },
+
+    async insertApprovalWithExecution(input) {
+      try {
+        return await db.transaction(async (tx) => {
+          const [approval] = await tx
+            .insert(approvalRecords)
+            .values({
+              disputeId: input.disputeId,
+              actionType: input.actionType,
+              merchantUserId: input.merchantUserId,
+              decision: "approved",
+              payloadHash: input.payloadHash,
+            })
+            .returning();
+          if (!approval) throw new Error("approval insert returned no row");
+          const [execution] = await tx
+            .insert(actionExecutions)
+            .values({
+              approvalRecordId: approval.id,
+              disputeId: input.disputeId,
+              actionType: input.actionType,
+              approvedPayload: input.approvedPayload,
+              originalDraft: input.originalDraft,
+              editedDraft: input.editedDraft,
+              paypalRequestId: input.paypalRequestId,
+            })
+            .returning();
+          if (!execution) throw new Error("execution insert returned no row");
+          return { approval, execution };
+        });
+      } catch (err) {
+        // The partial unique index (dispute, action) WHERE decision = 'approved' fired: someone else won.
+        if (errorCode(err) === UNIQUE_VIOLATION) throw new ApprovalConflictError();
+        throw err;
+      }
+    },
+
+    async insertRejection(input) {
+      const [row] = await db
+        .insert(approvalRecords)
+        .values({ disputeId: input.disputeId, actionType: input.actionType, merchantUserId: input.merchantUserId, decision: "rejected", payloadHash: input.payloadHash })
+        .returning();
+      if (!row) throw new Error("rejection insert returned no row");
+      return row;
+    },
+
+    async completeExecution(input): Promise<CompleteExecutionResult> {
+      return db.transaction(async (tx) => {
+        const updated = await tx
+          .update(actionExecutions)
+          .set({ executedAt: input.executedAt, isSimulated: input.isSimulated, paypalResponse: input.paypalResponse })
+          .where(and(eq(actionExecutions.id, input.executionId), isNull(actionExecutions.executedAt)))
+          .returning();
+        const execution = updated[0];
+        if (!execution) return { applied: false, execution: null, outcomeRecorded: false }; // already completed
+
+        if (input.actionType === "submit_evidence") {
+          await tx.update(disputes).set({ status: "action_taken" }).where(and(eq(disputes.id, input.disputeId), eq(disputes.status, "open")));
+          return { applied: true, execution, outcomeRecorded: false };
+        }
+
+        // accept_claim: the refund outcome is recorded automatically (REQ-DIS-09).
+        await tx
+          .update(disputes)
+          .set({ status: "resolved_refunded", outcome: "refunded", outcomeIsSimulated: input.isSimulated })
+          .where(and(eq(disputes.id, input.disputeId), inArray(disputes.status, ["open", "action_taken"])));
+        const outcome = input.refundOutcome;
+        if (!outcome) throw new Error("accept_claim completion needs a refund outcome snapshot");
+        const inserted = await tx
+          .insert(disputeOutcomes)
+          .values({
+            disputeId: input.disputeId,
+            outcome: "refunded",
+            riskScoreSnapshot: outcome.riskScoreSnapshot,
+            verdictSnapshot: outcome.verdictSnapshot,
+            winProbabilitySnapshot: outcome.winProbabilitySnapshot,
+            signalWeightsId: outcome.signalWeightsId,
+            isSimulated: input.isSimulated,
+          })
+          .onConflictDoNothing({ target: disputeOutcomes.disputeId })
+          .returning({ id: disputeOutcomes.id });
+        const recorded = inserted.length > 0;
+        // Count it only if this call created the outcome row, so a retry can never count it twice.
+        if (recorded) {
+          await tx
+            .update(signalWeights)
+            .set({ resolvedSinceLastProposal: sql`${signalWeights.resolvedSinceLastProposal} + 1` })
+            .where(eq(signalWeights.isActive, true));
+        }
+        return { applied: true, execution, outcomeRecorded: recorded };
+      });
     },
   };
 }

@@ -1,6 +1,15 @@
-import type { Dispute, EvidenceArtefact } from "@/db/schema";
+import { randomUUID } from "node:crypto";
+import type { ActionExecution, ApprovalRecord, Dispute, EvidenceArtefact } from "@/db/schema";
 import { makeOrder } from "@/lib/orders/__tests__/fakes";
-import type { AnalysisPatch, DisputeRecord, DisputesAnalysisRepo, DisputesReadRepo } from "../types";
+import {
+  ApprovalConflictError,
+  type AnalysisPatch,
+  type DisputeRecord,
+  type DisputesAnalysisRepo,
+  type DisputesReadRepo,
+  type DisputesRepo,
+  type NewApprovalWithExecution,
+} from "../types";
 
 export const NOW = new Date("2026-11-08T12:00:00.000Z");
 export const SESSION = "session-a";
@@ -123,6 +132,157 @@ export function createFakeAnalysisRepo(records: DisputeRecord[], artefacts: Evid
         return null;
       }
       return apply(id, patch);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The whole persistence contract, in memory (M2-04 / M2-05 tests).
+// ---------------------------------------------------------------------------
+export interface FakeOutcomeRow {
+  disputeId: string;
+  outcome: "refunded";
+  riskScoreSnapshot: number;
+  verdictSnapshot: "ship" | "verify" | "hold";
+  winProbabilitySnapshot: number;
+  signalWeightsId: string | null;
+  isSimulated: boolean;
+}
+
+export interface FakeDisputesRepo extends DisputesRepo, FakeAnalysisRepo {
+  approvals: ApprovalRecord[];
+  executions: ActionExecution[];
+  outcomes: FakeOutcomeRow[];
+  /** signal_weights.resolved_since_last_proposal on the active row. */
+  counter: { value: number };
+  /** Rows inserted over the repo's lifetime (an insert that failed is not counted). */
+  inserts: { approvals: number; executions: number; rejections: number };
+  /** The next insertApprovalWithExecution finds that another request approved first: `rival` is stored, then the unique index fires. */
+  raceNextApproval(rival: { executed: boolean }): void;
+}
+
+export function createFakeDisputesRepo(records: DisputeRecord[], artefacts: EvidenceArtefact[] = []): FakeDisputesRepo {
+  const base = createFakeAnalysisRepo(records, artefacts);
+  const approvals: ApprovalRecord[] = [];
+  const executions: ActionExecution[] = [];
+  const outcomes: FakeOutcomeRow[] = [];
+  const counter = { value: 0 };
+  const inserts = { approvals: 0, executions: 0, rejections: 0 };
+  let rival: { executed: boolean } | null = null;
+  const stamp = () => NOW.toISOString();
+
+  const store = (input: NewApprovalWithExecution, rivalRequestId?: string, executed = false) => {
+    const approval: ApprovalRecord = {
+      id: randomUUID(),
+      disputeId: input.disputeId,
+      actionType: input.actionType,
+      merchantUserId: input.merchantUserId,
+      decision: "approved",
+      payloadHash: input.payloadHash,
+      createdAt: stamp(),
+    };
+    const execution: ActionExecution = {
+      id: randomUUID(),
+      approvalRecordId: approval.id,
+      disputeId: input.disputeId,
+      actionType: input.actionType,
+      approvedPayload: input.approvedPayload,
+      originalDraft: input.originalDraft,
+      editedDraft: input.editedDraft,
+      paypalRequestId: rivalRequestId ?? input.paypalRequestId,
+      paypalResponse: executed ? { simulated: true } : null,
+      executedAt: executed ? stamp() : null,
+      isSimulated: executed,
+      createdAt: stamp(),
+    };
+    approvals.push(approval);
+    executions.push(execution);
+    inserts.approvals += 1;
+    inserts.executions += 1;
+    return { approval, execution };
+  };
+
+  const setDispute = (id: string, patch: Partial<Dispute>) => {
+    const i = base.records.findIndex((r) => r.dispute.id === id);
+    const current = base.records[i];
+    if (current) base.records[i] = { ...current, dispute: { ...current.dispute, ...patch, updatedAt: NOW.toISOString() } };
+  };
+
+  return {
+    ...base,
+    approvals,
+    executions,
+    outcomes,
+    counter,
+    inserts,
+    raceNextApproval: (r) => {
+      rival = r;
+    },
+
+    async findApprovalById(id) {
+      return approvals.find((a) => a.id === id) ?? null;
+    },
+    async findApprovedApproval(disputeId, actionType) {
+      return approvals.find((a) => a.disputeId === disputeId && a.actionType === actionType && a.decision === "approved") ?? null;
+    },
+    async getExecutionByApproval(approvalRecordId) {
+      return executions.find((e) => e.approvalRecordId === approvalRecordId) ?? null;
+    },
+    async getActiveWeightsId() {
+      return "active-weights-id";
+    },
+
+    async insertApprovalWithExecution(input) {
+      const exists = () => approvals.some((a) => a.disputeId === input.disputeId && a.actionType === input.actionType && a.decision === "approved");
+      if (rival) {
+        const r = rival;
+        rival = null;
+        store(input, randomUUID(), r.executed); // the other request's rows
+        throw new ApprovalConflictError();
+      }
+      if (exists()) throw new ApprovalConflictError(); // the partial unique index
+      return store(input);
+    },
+
+    async insertRejection(input) {
+      const row: ApprovalRecord = {
+        id: randomUUID(),
+        disputeId: input.disputeId,
+        actionType: input.actionType,
+        merchantUserId: input.merchantUserId,
+        decision: "rejected",
+        payloadHash: input.payloadHash,
+        createdAt: stamp(),
+      };
+      approvals.push(row);
+      inserts.rejections += 1;
+      return row;
+    },
+
+    async completeExecution(input) {
+      const i = executions.findIndex((e) => e.id === input.executionId);
+      const current = executions[i];
+      if (!current || current.executedAt !== null) return { applied: false, execution: null, outcomeRecorded: false }; // WHERE executed_at IS NULL
+      const execution: ActionExecution = { ...current, executedAt: input.executedAt, isSimulated: input.isSimulated, paypalResponse: input.paypalResponse };
+      executions[i] = execution;
+
+      const record = base.records.find((r) => r.dispute.id === input.disputeId);
+      if (input.actionType === "submit_evidence") {
+        if (record?.dispute.status === "open") setDispute(input.disputeId, { status: "action_taken" });
+        return { applied: true, execution, outcomeRecorded: false };
+      }
+
+      if (record && (record.dispute.status === "open" || record.dispute.status === "action_taken")) {
+        setDispute(input.disputeId, { status: "resolved_refunded", outcome: "refunded", outcomeIsSimulated: input.isSimulated });
+      }
+      const snapshot = input.refundOutcome;
+      if (!snapshot) throw new Error("accept_claim completion needs a refund outcome snapshot");
+      const already = outcomes.some((o) => o.disputeId === input.disputeId); // UNIQUE (dispute_id) + ON CONFLICT DO NOTHING
+      if (!already) {
+        outcomes.push({ disputeId: input.disputeId, outcome: "refunded", ...snapshot, isSimulated: input.isSimulated });
+        counter.value += 1;
+      }
+      return { applied: true, execution, outcomeRecorded: !already };
     },
   };
 }

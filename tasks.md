@@ -423,7 +423,7 @@
 
 ### M2-05 · PayPal service layer — disputes (write)
 
-- [ ] `submitEvidence(disputeId, payload, approvalRecordId)`:
+- [x] `submitEvidence(disputeId, payload, approvalRecordId)`:
   - Verify the approval record (`decision = 'approved'`) and load the existing `action_executions` row created by the approve handler (this function never inserts one; it reuses its `paypal_request_id`)
   - `shouldSimulate = isDemoMode() || dispute.is_seed || dispute.is_demo`
   - Map `dispute.reason` to `evidence_type` via `buildProvideEvidencePayload(dispute, draft, documents)`:
@@ -432,8 +432,21 @@
   - Unit test the payload builder for all three branches
   - Live: `POST /v1/customer/disputes/{id}/provide-evidence` with `PayPal-Request-Id` header; on failure, return error (do not set `executed_at`)
   - Simulate: mark simulated, set `executed_at`
-- [ ] `acceptClaim(disputeId, note, approvalRecordId)`:
+- [x] `acceptClaim(disputeId, note, approvalRecordId)`:
   - Same verify/load-execution and simulate vs. live logic; `POST /v1/customer/disputes/{id}/accept-claim` with `{ note, accept_claim_type: 'REFUND' }`
+
+
+> M2-05 notes (53 new tests; 531 in total). **Built before M2-04**, because M2-04's tests exercise the real executor (see CHANGES.md).
+>
+> - **Payload builder** (`src/lib/paypal/evidence-payload.ts`, pure): `item_not_received` -> `PROOF_OF_FULFILLMENT` with the tracking info on file (carrier mapped to UPS/FEDEX/USPS/DHL, anything else `OTHER` + `carrier_name_other`; no tracking URL; `date` only if `shippedAt` parses); `not_as_described` -> **`DECLARATION`** with notes, and `PHOTOS_OF_SHIPPED_ITEM` **only when a document is attached**. A test walks every reason x documents x tracking combination and asserts PayPal's rejected pairings (proof of fulfillment on a NAD claim, photos with no document) cannot be produced. An INR claim with no usable tracking is refused (`missing_tracking`), not sent half-empty. Notes are trimmed, CRLF-normalised and limited to PayPal's 2000 characters (2000 ok, 2001 refused). The accept-claim note is fixed text.
+> - **Live call** (`src/lib/paypal/dispute-writes.ts`): `POST /v1/customer/disputes/{id}/provide-evidence` and `/accept-claim`, id URL-encoded, with the **stored** `PayPal-Request-Id`. It is not exported from the PayPal index, and a structural test fails if anything but `src/lib/disputes/executor.ts` imports it.
+> - **Executor** (`src/lib/disputes/executor.ts`): never inserts approvals or executions; takes the approval and the unexecuted execution, runs the action through `submitEvidence` / `acceptClaim` (the existing `requireApproval` gate), then simulates (`DEMO_MODE`, seed or demo dispute: no network call, `is_simulated`, `executed_at` set) or sends live. A PayPal failure (or missing credentials, or no PayPal dispute id) returns `failed` and marks nothing done, so the next click is a retry with the same request id. A non-PayPal error is rethrown, not disguised as retryable. A missing, rejected, other-action or other-dispute approval throws `ApprovalRequiredError` before any call or simulation.
+> - **Consequences are one transaction** (`repo.completeExecution`): mark the execution done only if it is not already (`WHERE executed_at IS NULL`); `submit_evidence` -> dispute `action_taken`; `accept_claim` -> dispute `resolved_refunded` + outcome `refunded`, insert the `dispute_outcomes` row with `ON CONFLICT DO NOTHING`, and increment `resolved_since_last_proposal` only if that row was inserted. So a retry, or two simultaneous executions, can never count the refund twice (tested with a fake that mirrors the SQL AND against the real database).
+> - **Learning loop:** after a refund outcome is recorded, an optional `onOutcomeRecorded` hook runs (errors swallowed). The check itself belongs to M4; it is not bound yet, so today only the counter moves.
+> - **Verified against the real database** (8 live tests, temporary demo disputes, shared counter restored; `db:seed:verify` passes afterwards): a second APPROVED record for the same dispute and action is a genuine unique violation recognised as `ApprovalConflictError` (so the error-code mapping works through Drizzle's wrapping); 5 simultaneous first approvals give exactly 1 winner, 4 conflicts and exactly 1 execution row; rejections are unconstrained and do not block a later approval; completion sets `executed_at` once and a repeat is `applied: false`; an accept_claim completion gives one outcome row and one counter increment, and a retry changes nothing; a pre-existing outcome row means no second row and no counter change; an accept_claim completion without a snapshot rolls back entirely.
+> - **Test timeout raised to 30 s** (`vitest.config.mts`) because several files now talk to the remote database in parallel; offline tests still finish in milliseconds.
+> - **Not verified:** the live PayPal calls. The sandbox cannot be given a dispute from this app, so `provide-evidence` / `accept-claim` are exercised only against a mocked `fetch`. Open question for a real run: PayPal documents provide-evidence as `multipart/form-data` when documents are attached; the JSON body used here (no documents) is unconfirmed against the real endpoint.
+> - **Deviation:** the task describes `submitEvidence(disputeId, payload, approvalRecordId)` loading the execution row itself. Here the approve handler passes the approval and execution it already holds to `executeApproved`, which hands the stored payload to the existing gate functions (unchanged signature); the invariant is the same (gate first, never insert, reuse the stored request id).
 
 ---
 

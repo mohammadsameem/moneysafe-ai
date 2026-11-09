@@ -8,5 +8,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+    // Some tests talk to the real (remote) database; several files run in parallel. Offline tests
+    // finish in milliseconds, so a roomier limit only matters for the live ones.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });
