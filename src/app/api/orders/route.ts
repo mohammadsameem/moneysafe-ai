@@ -5,6 +5,8 @@ import { createSandboxOrder } from "@/lib/orders/service";
 import { getSessionId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
+/** A demo order is scored, and AI-enriched, in this request; allow time for a slow model. */
+export const maxDuration = 60;
 
 /**
  * Create a PayPal sandbox order. Returns the URL to send the buyer to for approval. When PayPal

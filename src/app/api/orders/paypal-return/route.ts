@@ -7,6 +7,8 @@ import { handlePayPalReturn } from "@/lib/orders/service";
 import { getSessionId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
+/** Capture, scoring and the AI steps run in this request; allow time for a slow model (each call is capped at 12 s). */
+export const maxDuration = 60;
 
 /**
  * PayPal sends the buyer here (a top-level GET navigation, so the SameSite=Lax session cookie is

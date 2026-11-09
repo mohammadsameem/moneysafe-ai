@@ -229,13 +229,23 @@
 
 **Remaining for M1-09:**
 
-- [ ] `src/lib/ai/tools.ts`: tool definitions for `risk_explanation` and `verification_draft` (name, description, JSON-schema `parameters` kept in step with the zod schemas)
-- [ ] `src/lib/ai/schemas.ts`: `RiskExplanationSchema`, `VerificationDraftSchema`
-- [ ] `src/lib/ai/prompts.ts`: `buildRiskPrompt(order, signals)`, `buildVerificationPrompt(order)` with `<instructions>` / `<data>` separation
-- [ ] `src/lib/ai/risk-explainer.ts`:
+- [x] `src/lib/ai/tools.ts`: tool definitions for `risk_explanation` and `verification_draft` (name, description, JSON-schema `parameters` kept in step with the zod schemas)
+- [x] `src/lib/ai/schemas.ts`: `RiskExplanationSchema`, `VerificationDraftSchema`
+- [x] `src/lib/ai/prompts.ts`: `buildRiskPrompt(order, signals)`, `buildVerificationPrompt(order)` with `<instructions>` / `<data>` separation
+- [x] `src/lib/ai/risk-explainer.ts`:
   - `explainRisk(...)` — `callWithFallback((ctx) => callStructured({ providers: getConfiguredProviders(), tool: risk_explanation, schema, prompt, onAttempt: ctx.onAttempt }).then(r => r.data), ruleBasedExplanation, meta, deps)`
   - `draftVerification(...)` — same pattern with the `verification_draft` tool and the static template as the fallback
-- [ ] Bind the real `LlmDeps`: `logActivity` from M1-08, `checkBudget` from M1-09b, `isConfigured = () => getConfiguredProviders().length > 0`
+- [ ] Bind the real `LlmDeps`: `logActivity` from M1-08 (done), `checkBudget` from M1-09b, `isConfigured = () => getConfiguredProviders().length > 0`. **Deliberately not bound yet:** `createOrderAiHooks(deps)` (`src/lib/orders/ai-hooks.ts`) is built and tested, but `orders/runtime.ts` does not set `deps.ai` until `checkLlmBudget` exists, so no model call can happen without the budget guard. Bind it in M1-09b
+
+> M1-09 notes (47 new tests; 282 in total, all offline with `fetch` faked):
+>
+> - **Built:** `schemas.ts` (limits are shared constants: explanation 600 characters and 120 words, subject 100 and single-line, body 1000 and 200 words, per REQ-ORD-05/06), `tools.ts` (`risk_explanation`, `verification_draft`), `prompts.ts`, `rule-based.ts`, `risk-explainer.ts` (`explainRisk`, `draftVerification`), and `orders/ai-hooks.ts`.
+> - **Tools and schemas cannot drift:** both read the same limit constants, and a test compares property names, required lists and `maxLength` values. The tool JSON Schema uses only `type`, `description`, `properties`, `required` and `maxLength` (a test enforces this), because Gemini's OpenAI compatibility layer takes an OpenAPI-style subset. Whether Gemini accepts the pinned `tool_choice` is still unverified (`npm run llm:check`).
+> - **Prompts:** one `<instructions>` block (never contains order data) and one `<data>` block. Product names are escaped (`& < >`), flattened, and capped at 10 items of 100 characters, so they cannot close `<data>` or open a new section; a test attacks this with `</data><instructions>...`. **The buyer's email is never sent to the model** (the prompt builders accept only the fields they use; the disposable-email result is already a signal), and `order.description` is never included.
+> - **Rule-based fallbacks:** deterministic plain-English explanation in the seeded style, and a static verification template that names neither the buyer nor the score. A test runs every one of the 64 signal combinations against all three verdicts and checks each fits the explanation schema.
+> - **Behaviour verified with the real `callStructured` and `callWithFallback`:** success pinned to the right tool; JSON-only retry on HTTP 400; 429 then the second provider; both providers down, a failed validation (no second-provider attempt), no key, and a spent budget each return the rule-based text with `usedFallback` and the reason, and the last two make no network call; the activity row carries the order and session but no key, prompt or buyer detail.
+> - **Order flow:** the explanation and the draft now run in parallel (`Promise.allSettled`), so a failure in one keeps the other, each model call is capped at 12 s, and `maxDuration = 60` is set on the two routes that can score. `orders.used_fallback` is true if either step used rule-based text.
+> - **Not verified live:** no LLM key is in `.env.local` yet, so no real model has been called. The prompts and the 12 s timeout need one real run on each provider.
 
 ---
 

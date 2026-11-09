@@ -394,6 +394,38 @@ describe("ingestAndScore", () => {
       expect(repo.rows.get(ORDER_ID)).toMatchObject({ aiExplanation: "Because of the signals.", usedFallback: true });
     });
 
+    it("runs the explanation and the verification draft together, not one after the other", async () => {
+      let releaseExplanation: () => void = () => undefined;
+      const explanationGate = new Promise<void>((resolve) => {
+        releaseExplanation = resolve;
+      });
+      const draftStarted = vi.fn(() => releaseExplanation()); // the explanation can only finish once the draft has started
+      const ai = hooks({
+        explainRisk: vi.fn(async () => {
+          await explanationGate;
+          return { text: "Explained.", usedFallback: false };
+        }),
+        draftVerification: vi.fn(async () => {
+          draftStarted();
+          return { draft: { subject: "S", body: "B" }, usedFallback: false };
+        }),
+      });
+      const repo = createFakeRepo([paid({ amountUsd: 300 })]);
+
+      await ingestAndScore(paid({ amountUsd: 300 }), SESSION, makeDeps({ repo, ai }));
+
+      expect(repo.rows.get(ORDER_ID)).toMatchObject({ aiExplanation: "Explained.", verificationDraft: { subject: "S", body: "B" } });
+    });
+
+    it("keeps the other AI result when one step fails", async () => {
+      const ai = hooks({ explainRisk: vi.fn(async () => { throw new Error("hook bug"); }) });
+      const repo = createFakeRepo([paid({ amountUsd: 300 })]);
+
+      await ingestAndScore(paid({ amountUsd: 300 }), SESSION, makeDeps({ repo, ai }));
+
+      expect(repo.rows.get(ORDER_ID)).toMatchObject({ aiExplanation: null, verificationDraft: { subject: "Quick check", body: "Is this you?" } });
+    });
+
     it("keeps the saved score when an AI hook throws", async () => {
       const ai = hooks({ explainRisk: vi.fn(async () => { throw new Error("hook bug"); }) });
       const repo = createFakeRepo([paid({ amountUsd: 300 })]);

@@ -98,38 +98,58 @@ export async function ingestAndScore(order: Order, sessionId: string | null, dep
   );
 
   if (!deps.ai) return scored;
+  const ai = deps.ai;
   const ctx = { sessionId };
   const aiStarted = Date.now();
+
+  // The explanation (any score above 0) and the verification draft ("Verify first" only) do not
+  // depend on each other, so they run together, and one failing never discards the other.
+  const [explanation, draft] = await Promise.allSettled([
+    riskScore >= 1 ? ai.explainRisk(scored, ctx) : Promise.resolve(null),
+    verdict === "verify" ? ai.draftVerification(scored, ctx) : Promise.resolve(null),
+  ]);
+
   const patch: Partial<NewOrder> = {};
-  try {
-    if (scored.riskScore !== null && scored.riskScore >= 1) {
-      const explanation = await deps.ai.explainRisk(scored, ctx);
-      patch.aiExplanation = explanation.text;
-      patch.usedFallback = explanation.usedFallback;
+  let usedFallback = false;
+  if (explanation.status === "fulfilled" && explanation.value) {
+    patch.aiExplanation = explanation.value.text;
+    usedFallback ||= explanation.value.usedFallback;
+  }
+  if (draft.status === "fulfilled" && draft.value) {
+    patch.verificationDraft = draft.value.draft;
+    usedFallback ||= draft.value.usedFallback;
+  }
+  // One flag covers both steps: if either was replaced by rule-based text, say so.
+  if (Object.keys(patch).length > 0) {
+    try {
+      scored = await deps.repo.updateOrder(order.id, { ...patch, usedFallback });
+    } catch {
+      // The score is already saved; the AI text is lost this time.
+      await recordEnrichmentFailure(deps, where, riskScore, verdict, "could not save the AI text", aiStarted);
+      return scored;
     }
-    if (scored.verdict === "verify") {
-      const draft = await deps.ai.draftVerification(scored, ctx);
-      patch.verificationDraft = draft.draft;
-      // One flag covers both AI steps: if either was replaced by rule-based text, say so.
-      patch.usedFallback = (patch.usedFallback ?? false) || draft.usedFallback;
-    }
-    if (Object.keys(patch).length > 0) scored = await deps.repo.updateOrder(order.id, patch);
-  } catch {
-    // The score is already saved. A failing AI step must never undo or block the order.
-    await record(
-      deps,
-      where,
-      {
-        stepType: "llm_call",
-        toolName: "order_ai_enrichment",
-        inputSummary: `order scored ${riskScore} -> ${verdict}`,
-        outputSummary: "AI enrichment failed unexpectedly; the order keeps its rule-based score",
-        status: "error",
-      },
-      aiStarted,
-    );
+  }
+  if (explanation.status === "rejected" || draft.status === "rejected") {
+    // Static text only: a hook's error message is not logged. The score is already saved.
+    await recordEnrichmentFailure(deps, where, riskScore, verdict, "an AI step failed unexpectedly; the order keeps its rule-based score", aiStarted);
   }
   return scored;
+}
+
+async function recordEnrichmentFailure(
+  deps: OrderDeps,
+  where: { sessionId: string | null; refOrderId: string },
+  riskScore: number,
+  verdict: string,
+  outputSummary: string,
+  startedAt: number,
+): Promise<void> {
+  await record(
+    deps,
+    where,
+    { stepType: "llm_call", toolName: "order_ai_enrichment", inputSummary: `order scored ${riskScore} -> ${verdict}`, outputSummary, status: "error" },
+    startedAt,
+  );
 }
 
 // ---------------------------------------------------------------------------
