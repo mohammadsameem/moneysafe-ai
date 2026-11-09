@@ -4,6 +4,7 @@ import { DemoBadge } from "@/components/badges";
 import { DeadlineCountdown } from "@/components/deadline-countdown";
 import { AnalysisTrigger } from "@/components/disputes/analysis-trigger";
 import { ApprovalPanel } from "@/components/disputes/approval-panel";
+import { DisputeTimeline } from "@/components/disputes/dispute-timeline";
 import { EvidenceChips } from "@/components/disputes/evidence-chips";
 import { RecommendationCard } from "@/components/disputes/recommendation-card";
 import { WinLikelihoodMeter } from "@/components/disputes/win-likelihood-meter";
@@ -13,6 +14,7 @@ import { loadDisputeDetail } from "@/lib/disputes/detail";
 import { OUTCOME_LABEL, OUTCOME_TONE, REASON_LABEL, STATUS_LABEL, STATUS_TONE, money } from "@/lib/disputes/present";
 import { isResolvedStatus } from "@/lib/disputes/read";
 import { buildDetailDeps } from "@/lib/disputes/runtime";
+import { buildTimeline } from "@/lib/disputes/timeline";
 import { getSessionId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +25,7 @@ export default async function DisputeDetailPage({ params }: { params: { id: stri
   const detail = sessionId ? await loadDisputeDetail(params.id, sessionId, buildDetailDeps()) : null;
   if (!detail) notFound();
   const { view, panel, willSimulate, renderedAt } = detail;
+  const timeline = buildTimeline(detail);
   const analysis = view.analysis;
   const resolved = isResolvedStatus(view.status);
 
@@ -78,11 +81,15 @@ export default async function DisputeDetailPage({ params }: { params: { id: stri
               <WinLikelihoodMeter probability={analysis.winProbability} label={analysis.winLikelihoodLabel} llmAdjustment={analysis.llmAdjustment} />
             ) : null}
           </div>
-          <div className="lg:col-span-5">
+          <div className="lg:col-span-3">
             <ApprovalPanel disputeId={view.id} panel={panel} amountUsd={view.amountUsd} willSimulate={willSimulate} />
+          </div>
+          <div className="lg:col-span-2">
+            <DisputeTimeline steps={timeline} />
           </div>
         </div>
       )}
+      {analysis === null ? <DisputeTimeline steps={timeline} /> : null}
     </div>
   );
 }

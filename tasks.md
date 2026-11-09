@@ -505,8 +505,16 @@
 
 ### M2-08 · Dispute timeline
 
-- [ ] `<DisputeTimeline events />`: 6 steps (dispute created → evidence assembled → analysis completed → draft created → merchant decision → action executed); timestamps, status, simulated labels
-- [ ] Wire to dispute detail; derive events from DB timestamps
+- [x] `<DisputeTimeline events />`: 6 steps (dispute created → evidence assembled → analysis completed → draft created → merchant decision → action executed); timestamps, status, simulated labels
+- [x] Wire to dispute detail; derive events from DB timestamps
+
+
+> M2-08 notes (14 new tests; 636 in total; `npm run build` passes):
+>
+> - **`buildTimeline`** (`src/lib/disputes/timeline.ts`, pure) and **`<DisputeTimeline>`** (`src/components/disputes/dispute-timeline.tsx`): the six steps in order, Dispute created, Evidence assembled, AI analysis completed, Draft created, Merchant decision, PayPal action executed. Each is done / not yet / skipped / failed, with a timestamp taken only from the database (dispute `created_at`, the newest evidence artefact, `analysis_computed_at`, the latest approval or rejection, the execution's `executed_at`, or the resolution date for historical seeds) and the Simulated badge on a simulated action or outcome. Covers: refund (draft skipped), AI unavailable, approved with edits, rejected (action skipped), rejected-then-approved, a failed PayPal call (failed, with Retry advice), simulated refund, and historical resolved disputes (decision skipped, resolved at the resolution date).
+> - **Wired** into the detail page beside the decision panel (and under the analysing state when there is no analysis yet), refreshed after every approve or reject.
+> - **Verified live** (dev server, real Supabase, signed in): SEED-C, SEED-D and SEED-E each show all six steps; after a real API approval of a temporary demo dispute the timeline shows \"Approved the response.\" and \"Simulated: evidence submitted.\" with timestamps; the retry state shows the failed step; an unanalysed dispute shows \"Not analysed yet.\"; an AI-fallback one says the AI step was unavailable. Temporary rows removed; `db:seed:verify` passes.
+> - **Not verified:** the timeline in a real browser.
 
 ---
 
