@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useToast } from "@/components/toast/toast-provider";
 
 const MAX_IN_PROGRESS_POLLS = 15;
 
@@ -12,11 +13,13 @@ const MAX_IN_PROGRESS_POLLS = 15;
  */
 export function AnalysisTrigger({ disputeId }: { disputeId: string }) {
   const router = useRouter();
+  const { toast } = useToast();
   const started = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   const run = useCallback(async () => {
     setError(null);
+    toast({ tone: "info", title: "Analysing this dispute", description: "Weighing the evidence and drafting a response. This takes a few seconds." });
     try {
       for (let poll = 0; poll <= MAX_IN_PROGRESS_POLLS; poll++) {
         const response = await fetch(`/api/disputes/${disputeId}/analyze`, { method: "POST" });
@@ -31,14 +34,17 @@ export function AnalysisTrigger({ disputeId }: { disputeId: string }) {
           continue;
         }
         if (!response.ok) throw new Error(String(response.status));
+        toast({ tone: "success", title: "Analysis ready", description: "Review the recommendation, then approve or reject." });
         router.refresh();
         return;
       }
       setError("The analysis is taking longer than expected.");
+      toast({ tone: "error", title: "The analysis is taking too long", description: "Nothing was decided. Try again." });
     } catch {
       setError("The analysis could not be completed.");
+      toast({ tone: "error", title: "The analysis could not be completed", description: "Nothing was decided and nothing was sent to PayPal." });
     }
-  }, [disputeId, router]);
+  }, [disputeId, router, toast]);
 
   useEffect(() => {
     if (started.current) return; // React may run effects twice in development

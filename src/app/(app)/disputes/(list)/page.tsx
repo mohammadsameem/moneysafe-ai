@@ -44,7 +44,7 @@ export default async function DisputesPage({ searchParams }: { searchParams: { t
             key={t.key}
             href={t.key === "open" ? "/disputes" : "/disputes?tab=resolved"}
             aria-current={tab === t.key ? "page" : undefined}
-            className={`-mb-px rounded-t-md border-b-2 px-4 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+            className={`-mb-px inline-flex min-h-[2.75rem] items-center rounded-t-md border-b-2 px-4 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
               tab === t.key ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >

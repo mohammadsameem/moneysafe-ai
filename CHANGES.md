@@ -5,6 +5,7 @@ Notable changes to the spec and architecture, newest first. Task-by-task progres
 
 ## Deviation log
 One line per deviation from the written specs, newest first.
+- 2026-11-09 M4-06 / REQ-NFR-07: the order and dispute detail pages have no route-level `loading.tsx` (it would make a missing record's 404 a 200, see M2-07); their activity feed streams in behind a section skeleton instead, and the decision panel and feeds sit in section error boundaries. Success messages that used to appear inline are toasts (the panel or card they sat in re-renders or disappears); failures stay on screen as well.
 - 2026-11-09 M4-05 / REQ-DU-03 (new): "Restart my demo" (`POST /api/demo/restart`) is a session-scoped reset the spec does not have; it never refreshes the Insights cache, so after it removes outcome rows the page shows a rule-based summary of the current data with a "refreshed after the next resolved dispute" note (a stale cache is no longer reported as "AI unavailable"); it also keeps the global reset's audit row, which is the cooldown marker.
 - 2026-11-09 M4-05 / REQ-DU-01: the global reset adds a `reset_demo_global` audit row (so a freshly reset database has 9 activity rows, not 8) and a 10-second cooldown from that row (429 with `Retry-After`); `db:seed:verify` tolerates `reset_demo_*` rows. It also clears approvals, executions, outcomes, evidence and activity completely and re-writes the seed's own, instead of deleting only `is_seed = false` rows as the task wrote, so legacy rows on seed disputes cannot survive.
 

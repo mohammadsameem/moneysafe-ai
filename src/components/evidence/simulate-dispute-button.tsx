@@ -2,10 +2,12 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useToast } from "@/components/toast/toast-provider";
 
 /** "Simulate dispute" (REQ-DU-02): opens a synthetic dispute on this shipped order, for this session only. */
 export function SimulateDisputeButton({ orderId }: { orderId: string }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,12 +22,20 @@ export function SimulateDisputeButton({ orderId }: { orderId: string }) {
       }
       const body = (await response.json().catch(() => null)) as { disputeId?: string; message?: string } | null;
       if ((response.ok || response.status === 409) && body?.disputeId) {
+        toast(
+          response.ok
+            ? { tone: "success", title: "Simulated dispute opened", description: "It is analysed when you open it. Nothing is sent to PayPal." }
+            : { tone: "info", title: "You already simulated a dispute on this order", description: "Opening it." },
+        );
         router.push(`/disputes/${body.disputeId}`);
         return;
       }
-      setError(body?.message ?? "The dispute could not be created.");
+      const text = body?.message ?? "The dispute could not be created.";
+      setError(text);
+      toast({ tone: "error", title: "The dispute could not be created", description: text });
     } catch {
       setError("We could not reach the server. Please try again.");
+      toast({ tone: "error", title: "We could not reach the server", description: "No dispute was created. Try again." });
     } finally {
       setBusy(false);
     }

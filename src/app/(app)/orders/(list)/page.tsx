@@ -1,4 +1,5 @@
 import { NewOrderForm } from "@/components/new-order-form";
+import { ScoringLabel } from "@/components/scoring-label";
 import { OrdersTable } from "@/components/orders-table";
 import { createDrizzleReadRepo, toOrderSummary } from "@/lib/orders/queries";
 import { ORDER_NOTICES, isOrderNoticeKey } from "@/lib/orders/notices";
@@ -15,7 +16,10 @@ export default async function OrdersPage({ searchParams }: { searchParams: { not
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold tracking-tight">Orders</h1>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h1 className="text-2xl font-semibold tracking-tight">Orders</h1>
+        <ScoringLabel />
+      </div>
       {notice ? (
         <p role="status" className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">{notice}</p>
       ) : null}

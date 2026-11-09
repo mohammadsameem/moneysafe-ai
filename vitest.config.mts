@@ -5,6 +5,9 @@ export default defineConfig({
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
+  // Lets a test render a component to HTML (react-dom/server) without importing React in every component.
+  // tsconfig keeps "jsx": "preserve" for Next; this only affects the test transform.
+  oxc: { jsx: { runtime: "automatic" } },
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],

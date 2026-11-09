@@ -2,12 +2,14 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useToast } from "@/components/toast/toast-provider";
 
 const field = "mt-1 block w-full rounded-md border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /** Append one buyer message to the evidence (append-only; REQ-EV-01 "buyer communications"). */
 export function LogMessageForm({ orderId }: { orderId: string }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -27,14 +29,18 @@ export function LogMessageForm({ orderId }: { orderId: string }) {
       });
       const body = (await response.json().catch(() => null)) as { message?: string; issues?: { field: string; message: string }[] } | null;
       if (!response.ok) {
-        setError(body?.issues?.[0] ? `${body.issues[0].field} ${body.issues[0].message}.` : body?.message ?? "The message could not be saved.");
+        const text = body?.issues?.[0] ? `${body.issues[0].field} ${body.issues[0].message}.` : body?.message ?? "The message could not be saved.";
+        setError(text);
+        toast({ tone: "error", title: "The message could not be saved", description: text });
         return;
       }
       formEl.reset();
       setDone(true);
+      toast({ tone: "success", title: "Message saved to the evidence", description: "Stored evidence is never changed later." });
       router.refresh();
     } catch {
       setError("We could not reach the server. Please try again.");
+      toast({ tone: "error", title: "We could not reach the server", description: "The message was not saved. Try again." });
     } finally {
       setBusy(false);
     }

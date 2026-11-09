@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { DemoBadge } from "@/components/badges";
+import { useToast } from "@/components/toast/toast-provider";
 import { describeDelta } from "@/lib/insights/present";
 import type { ProposalView } from "@/lib/insights/read";
 
@@ -17,6 +18,7 @@ type Notice = { tone: "ok" | "error"; text: string } | null;
  */
 export function WeightChangeProposal({ proposal }: { proposal: ProposalView }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
 
@@ -36,14 +38,22 @@ export function WeightChangeProposal({ proposal }: { proposal: ProposalView }) {
         return;
       }
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      // The card disappears once the proposal is decided, so a success has to be a toast; a failure stays on the card too.
       if (response.ok) {
-        setNotice({ tone: "ok", text: kind === "approve" ? "Approved. The new weights apply to orders scored from now on." : "Rejected. The weights are unchanged." });
+        toast(
+          kind === "approve"
+            ? { tone: "success", title: "Weight change approved", description: "The new weights apply to orders scored from now on." }
+            : { tone: "info", title: "Weight change rejected", description: "The weights are unchanged." },
+        );
       } else {
-        setNotice({ tone: "error", text: body?.message ?? "Something went wrong. Please try again." });
+        const text = body?.message ?? "Something went wrong. Please try again.";
+        setNotice({ tone: "error", text });
+        toast({ tone: "error", title: "The decision could not be saved", description: text });
       }
       router.refresh();
     } catch {
       setNotice({ tone: "error", text: "We could not reach the server. Please try again." });
+      toast({ tone: "error", title: "We could not reach the server", description: "Nothing was changed. Try again." });
     } finally {
       setBusy(null);
     }
@@ -78,7 +88,7 @@ export function WeightChangeProposal({ proposal }: { proposal: ProposalView }) {
                   <th scope="row" className="py-2 pr-4 text-left font-normal">{c.label}</th>
                   <td className="px-2 py-2 text-right tabular-nums">{c.current}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{c.proposed}</td>
-                  <td className={`py-2 pl-2 text-right tabular-nums ${d.className}`}>
+                  <td className={`whitespace-nowrap py-2 pl-2 text-right text-xs tabular-nums sm:text-sm ${d.className}`}>
                     <span aria-hidden="true">{d.arrow} </span>
                     {d.text}
                     <span className="sr-only">, {d.spoken}</span>

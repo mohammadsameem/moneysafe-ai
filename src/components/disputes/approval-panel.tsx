@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { SimulatedBadge } from "@/components/badges";
 import { StartDemoButton } from "@/components/demo/start-demo-button";
+import { useToast } from "@/components/toast/toast-provider";
 import { SHARED_EXAMPLE_MESSAGE } from "@/lib/demo/messages";
 import type { PanelState } from "@/lib/disputes/detail";
 import { money } from "@/lib/disputes/present";
@@ -32,6 +33,7 @@ interface Props {
  */
 export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate, canSimulateOutcome = false }: Props) {
   const router = useRouter();
+  const { toast } = useToast();
   const draft = panel.mode === "decide" ? panel.draft ?? "" : "";
   const [text, setText] = useState(draft);
   const [editing, setEditing] = useState(false);
@@ -55,22 +57,32 @@ export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate, canSi
         return;
       }
       const body = (await response.json().catch(() => null)) as { status?: string; message?: string; simulated?: boolean; error?: string } | null;
+      // Successes are toasts (the panel re-renders into its "done" state); failures stay on screen with a Retry.
       if (response.ok && body?.status === "executed") {
-        setNotice({ tone: "ok", text: body.simulated ? "Approved. The action was simulated: nothing was sent to PayPal." : "Approved and sent to PayPal." });
+        toast(
+          body.simulated
+            ? { tone: "success", title: "Approved (simulated)", description: "Your approval is recorded. Nothing was sent to PayPal." }
+            : { tone: "success", title: "Approved and sent to PayPal" },
+        );
       } else if (response.ok && body?.status === "already_executed") {
-        setNotice({ tone: "info", text: "Action already executed" });
+        toast({ tone: "info", title: "Action already executed", description: "It only ever runs once." });
       } else if (response.ok && body?.status === "rejected") {
-        setNotice({ tone: "info", text: "Rejected. Nothing was sent to PayPal. You can still approve it later." });
+        toast({ tone: "info", title: "Rejected", description: "Nothing was sent to PayPal. You can still approve it later." });
       } else if (response.status === 502) {
-        setNotice({ tone: "error", text: `PayPal did not accept the request: ${body?.message ?? "unknown error"}. Nothing was lost; you can retry safely.`, retryable: true });
+        const text = `PayPal did not accept the request: ${body?.message ?? "unknown error"}. Nothing was lost; you can retry safely.`;
+        setNotice({ tone: "error", text, retryable: true });
+        toast({ tone: "error", title: "PayPal did not accept the request", description: "Nothing was lost. Use Retry; it is safe." });
       } else {
-        setNotice({ tone: "error", text: body?.message ?? "Something went wrong. Please try again." });
+        const text = body?.message ?? "Something went wrong. Please try again.";
+        setNotice({ tone: "error", text });
+        toast({ tone: "error", title: "The action could not be completed", description: text });
       }
       setConfirming(false);
       setEditing(false);
       router.refresh();
     } catch {
       setNotice({ tone: "error", text: "We could not reach the server. Please try again.", retryable: true });
+      toast({ tone: "error", title: "We could not reach the server", description: "Nothing was changed. Try again." });
     } finally {
       setBusy(false);
     }
@@ -91,13 +103,16 @@ export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate, canSi
       }
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
       if (response.ok) {
-        setNotice({ tone: "ok", text: `Recorded: dispute ${outcome === "won" ? "won" : "lost"} (simulated outcome).` });
+        toast({ tone: "success", title: `Recorded: dispute ${outcome === "won" ? "won" : "lost"}`, description: "Saved as a simulated outcome. The Dashboard and Insights now include it." });
       } else {
-        setNotice({ tone: "error", text: body?.message ?? "The outcome could not be recorded." });
+        const text = body?.message ?? "The outcome could not be recorded.";
+        setNotice({ tone: "error", text });
+        toast({ tone: "error", title: "The outcome could not be recorded", description: text });
       }
       router.refresh();
     } catch {
       setNotice({ tone: "error", text: "We could not reach the server. Please try again." });
+      toast({ tone: "error", title: "We could not reach the server", description: "Nothing was changed. Try again." });
     } finally {
       setBusy(false);
     }

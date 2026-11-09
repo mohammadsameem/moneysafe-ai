@@ -795,10 +795,22 @@ Added at checkpoint E. Built right after M3-06.
 
 ### M4-06 · Polish — loading, empty states, errors
 
-- [ ] Loading skeletons for all pages and major sections
-- [ ] Empty states with meaningful messages for all list views
-- [ ] Error boundaries: section-level error cards with retry buttons
-- [ ] `<Toaster />` for: approval submitted, write error, reset complete, analysis triggered
+- [x] Loading skeletons for all pages and major sections
+- [x] Empty states with meaningful messages for all list views
+- [x] Error boundaries: section-level error cards with retry buttons
+- [x] `<Toaster />` for: approval submitted, write error, reset complete, analysis triggered
+
+
+> M4-06 notes (19 new tests; 867 in total with M4-07's):
+>
+> - **Loading skeletons:** the Dashboard, Orders, Disputes, Insights and Agent Activity pages each have a `loading.tsx` (the Dashboard and the two list pages live in route groups, so a skeleton can never wrap a detail page). The detail pages cannot have one (it would turn a missing record's 404 into a 200); instead their activity feed streams in behind a section skeleton (`<Suspense fallback={<ActivitySkeleton />}>`, `ActivitySection`), after the record itself has been loaded. New shared pieces: `Skeleton`, `SectionSkeleton`, `EmptyState` (`src/components/ui/states.tsx`).
+> - **Empty states:** every list has a meaningful one (orders, disputes Open / Resolved, activity, Insights outcome chart, Dashboard donut and feed); verified by the existing pages and the new `EmptyState`.
+> - **Error boundaries with retry:** `app/(app)/error.tsx` (route level; the navigation stays, the page content becomes an error card, and Try again runs `router.refresh()` then `reset()`), `app/global-error.tsx` (the root layout failed), `app/(app)/not-found.tsx` (a friendly 404 with links; still a real 404 status), and `SectionBoundary` (a client error boundary around the decision panel and every activity feed, so one widget failing becomes a card with a Try again button and the rest of the page keeps working). The card never repeats the error's own message: it says what could not be shown, that nothing was changed or sent to PayPal, and a reference (Next's digest) (`describeError`).
+> - **Toasts:** every client component that POSTs now reports the result: approval submitted / already executed / rejected, a PayPal write error (also kept on screen with Retry), analysis started / ready / failed, ship (and PayPal's non-blocking warnings, which used to vanish when the button unmounted), buyer message saved, simulated dispute opened, Start demo, new order, weight change approved / rejected (the card disappears, so the old inline message was never seen), simulated outcome recorded. A test fails if a component with `method: "POST"` does not use `useToast`.
+> - **REQ-NFR-01:** `<ScoringLabel>` ("Explainable risk signals + AI reasoning") is now next to scores on the Orders list, the order detail, the dispute's win-likelihood meter, the Dashboard donut and the Insights weights (the last two since M4-03/04); a test asserts it on each, and another scans every `.ts` / `.tsx` under `src` (comments stripped) for "trained fraud model", "AI fraud detection" and similar and finds none.
+> - **Test setup:** `vitest.config.mts` now sets `oxc.jsx.runtime = "automatic"` so a test can render a component to HTML with `react-dom/server` (tsconfig keeps `jsx: preserve` for Next). Tests render `ErrorCard`, `EmptyState`, `SectionSkeleton` and `ScoringLabel`, and check the structural rules above.
+> - **Verified live** (real headless Edge against the dev server; see M4-07 for the full run): toasts appeared for Start demo, Approve (simulated), Simulate outcome, Approve change, Restart my demo, Reset and the reset cooldown; the 404 page rendered with the navigation; zero console errors or hydration warnings on any page at either width.
+> - **Not verified:** a route-level or section error boundary actually triggered by a failure (no failure could be induced without breaking the database; the cards are rendered in unit tests and the files compile); the toasts for the ship / buyer-message / new-order / analysis paths in the browser (the same provider and the same pattern as the ones clicked).
 
 ---
 

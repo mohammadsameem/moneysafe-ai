@@ -1,4 +1,5 @@
 import { ActivityFeed } from "@/components/activity/activity-feed";
+import { SectionBoundary } from "@/components/section-boundary";
 import { listActivity } from "@/lib/activity/queries";
 import { getSessionId } from "@/lib/session";
 
@@ -14,7 +15,9 @@ export default async function ActivityPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Agent Activity</h1>
         <p className="text-sm text-muted-foreground">Every step the agent took: PayPal calls, AI calls, rule checks and your decisions. Personal details are removed from the summaries.</p>
       </div>
-      <ActivityFeed initial={initial} full title="All activity" />
+      <SectionBoundary what="activity feed">
+        <ActivityFeed initial={initial} full title="All activity" />
+      </SectionBoundary>
     </div>
   );
 }

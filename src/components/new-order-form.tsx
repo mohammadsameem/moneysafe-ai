@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useToast } from "@/components/toast/toast-provider";
 
 const SHIPPING = [
   { value: "standard", label: "Standard" },
@@ -23,6 +24,7 @@ interface Issue {
  */
 export function NewOrderForm() {
   const router = useRouter();
+  const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issues, setIssues] = useState<Issue[]>([]);
@@ -53,19 +55,24 @@ export function NewOrderForm() {
       const body = (await response.json().catch(() => null)) as { orderId?: string; approvalUrl?: string | null; issues?: Issue[] } | null;
       if (response.status === 400 && body?.issues) {
         setIssues(body.issues);
+        toast({ tone: "error", title: "Check the highlighted fields", description: body.issues[0]?.message });
         return;
       }
       if (!response.ok || !body?.orderId) {
         setError("We could not create the order. Please try again.");
+        toast({ tone: "error", title: "We could not create the order", description: "Nothing was created. Try again." });
         return;
       }
       if (body.approvalUrl && body.approvalUrl.startsWith("https://")) {
+        toast({ tone: "info", title: "Opening PayPal", description: "Approve the payment there as the buyer." });
         window.location.assign(body.approvalUrl); // PayPal sandbox approval page
       } else {
+        toast({ tone: "success", title: "Demo order created and scored", description: "Open its risk breakdown below." });
         router.push(`/orders/${body.orderId}`); // demo order: already scored
       }
     } catch {
       setError("We could not reach the server. Please try again.");
+      toast({ tone: "error", title: "We could not reach the server", description: "Nothing was created. Try again." });
     } finally {
       setBusy(false);
     }

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { useToast } from "@/components/toast/toast-provider";
 
 const CARRIERS = [
   { value: "USPS", label: "USPS" },
@@ -16,10 +17,10 @@ const primary = "rounded-md bg-primary px-4 py-2 text-sm font-medium text-primar
 /** "Mark as shipped": a modal with the tracking number and carrier (REQ-EV-01). */
 export function ShipOrderButton({ orderId }: { orderId: string }) {
   const router = useRouter();
+  const { toast } = useToast();
   const dialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [warnings, setWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     const d = dialog.current;
@@ -45,14 +46,19 @@ export function ShipOrderButton({ orderId }: { orderId: string }) {
       }
       const body = (await response.json().catch(() => null)) as { status?: string; warnings?: string[]; message?: string; issues?: { message: string }[] } | null;
       if (!response.ok || body?.status !== "shipped") {
-        setError(body?.issues?.[0] ? `Tracking number ${body.issues[0].message}.` : body?.message ?? "The order could not be marked as shipped.");
+        const text = body?.issues?.[0] ? `Tracking number ${body.issues[0].message}.` : body?.message ?? "The order could not be marked as shipped.";
+        setError(text);
+        toast({ tone: "error", title: "The order could not be marked as shipped", description: text });
         return;
       }
-      setWarnings(body.warnings ?? []);
       dialog.current?.close();
+      toast({ tone: "success", title: "Marked as shipped", description: "The evidence for this order is assembled and stored." });
+      // PayPal's tracking call is non-blocking; if it warned, say so (this button unmounts once shipped, so inline text would vanish).
+      for (const warning of body.warnings ?? []) toast({ tone: "info", title: "Heads up", description: warning });
       router.refresh();
     } catch {
       setError("We could not reach the server. Please try again.");
+      toast({ tone: "error", title: "We could not reach the server", description: "The order was not changed. Try again." });
     } finally {
       setBusy(false);
     }
@@ -63,13 +69,6 @@ export function ShipOrderButton({ orderId }: { orderId: string }) {
       <button type="button" className={primary} onClick={() => dialog.current?.showModal()}>
         Mark as shipped
       </button>
-      {warnings.length > 0 ? (
-        <div role="status" className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
-          {warnings.map((w) => (
-            <p key={w}>{w}</p>
-          ))}
-        </div>
-      ) : null}
       <dialog ref={dialog} aria-labelledby="ship-title" className="w-[min(28rem,calc(100vw-2rem))] rounded-xl border bg-card p-0 text-foreground shadow-xl backdrop:bg-black/40">
         <form onSubmit={onSubmit} className="space-y-4 p-5" noValidate>
           <div>

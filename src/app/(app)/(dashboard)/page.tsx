@@ -3,6 +3,7 @@ import { ActivityFeed } from "@/components/activity/activity-feed";
 import { JudgeGuide } from "@/components/dashboard/judge-guide";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { RiskDonut } from "@/components/dashboard/risk-donut";
+import { SectionBoundary } from "@/components/section-boundary";
 import { ResetDemoButton } from "@/components/demo/reset-demo-button";
 import { RestartDemoButton } from "@/components/demo/restart-demo-button";
 import { loadDashboard } from "@/lib/dashboard/load";
@@ -64,7 +65,9 @@ export default async function DashboardPage() {
           <div className="grid gap-6 lg:grid-cols-2">
             <RiskDonut distribution={view.verdict_distribution} />
             <div className="space-y-2">
-              <ActivityFeed initial={{ entries: view.recent_activity, page: 1, pageSize: view.recent_activity.length || 5, hasMore: false }} title="Recent agent activity" />
+              <SectionBoundary what="activity feed">
+                <ActivityFeed initial={{ entries: view.recent_activity, page: 1, pageSize: view.recent_activity.length || 5, hasMore: false }} title="Recent agent activity" />
+              </SectionBoundary>
               <p className="text-right text-sm">
                 <Link href="/activity" className="font-medium underline underline-offset-2 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   View all activity

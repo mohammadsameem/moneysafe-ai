@@ -2,8 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { DemoBadge } from "@/components/badges";
 import { DeadlineCountdown } from "@/components/deadline-countdown";
-import { ActivityFeed } from "@/components/activity/activity-feed";
-import { listActivity } from "@/lib/activity/queries";
+import { Suspense } from "react";
+import { ActivitySection, ActivitySkeleton } from "@/components/activity/activity-section";
+import { ScoringLabel } from "@/components/scoring-label";
+import { SectionBoundary } from "@/components/section-boundary";
 import { AnalysisTrigger } from "@/components/disputes/analysis-trigger";
 import { ApprovalPanel } from "@/components/disputes/approval-panel";
 import { DisputeTimeline } from "@/components/disputes/dispute-timeline";
@@ -28,7 +30,6 @@ export default async function DisputeDetailPage({ params }: { params: { id: stri
   if (!detail) notFound();
   const { view, panel, willSimulate, renderedAt } = detail;
   const timeline = buildTimeline(detail);
-  const activity = await listActivity(sessionId!, { refDisputeId: view.id, pageSize: 10 });
   const analysis = view.analysis;
   const resolved = isResolvedStatus(view.status);
 
@@ -81,11 +82,16 @@ export default async function DisputeDetailPage({ params }: { params: { id: stri
           </div>
           <div className="space-y-6 lg:col-span-2">
             {analysis.winProbability !== null && analysis.winLikelihoodLabel !== null ? (
-              <WinLikelihoodMeter probability={analysis.winProbability} label={analysis.winLikelihoodLabel} llmAdjustment={analysis.llmAdjustment} />
+              <div className="space-y-2">
+                <WinLikelihoodMeter probability={analysis.winProbability} label={analysis.winLikelihoodLabel} llmAdjustment={analysis.llmAdjustment} />
+                <ScoringLabel />
+              </div>
             ) : null}
           </div>
           <div className="lg:col-span-3">
-            <ApprovalPanel disputeId={view.id} panel={panel} amountUsd={view.amountUsd} willSimulate={willSimulate} canSimulateOutcome={detail.canSimulateOutcome} />
+            <SectionBoundary what="decision panel">
+              <ApprovalPanel disputeId={view.id} panel={panel} amountUsd={view.amountUsd} willSimulate={willSimulate} canSimulateOutcome={detail.canSimulateOutcome} />
+            </SectionBoundary>
           </div>
           <div className="lg:col-span-2">
             <DisputeTimeline steps={timeline} />
@@ -93,7 +99,9 @@ export default async function DisputeDetailPage({ params }: { params: { id: stri
         </div>
       )}
       {analysis === null ? <DisputeTimeline steps={timeline} /> : null}
-      <ActivityFeed initial={activity} refDisputeId={view.id} title="Activity for this dispute" />
+      <Suspense fallback={<ActivitySkeleton />}>
+        <ActivitySection sessionId={sessionId!} refDisputeId={view.id} title="Activity for this dispute" />
+      </Suspense>
     </div>
   );
 }
