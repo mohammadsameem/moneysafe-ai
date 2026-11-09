@@ -177,7 +177,7 @@
 ### M1-07b · Real sandbox order flow
 
 - [x] `POST /api/orders` → `paypal.createOrder` with `intent: CAPTURE`, `return_url` = `/api/orders/paypal-return`, `cancel_url` = `/api/orders/paypal-cancel`; insert order as `status = created` with `paypal_order_id`; return `{ orderId, approvalUrl }`
-- [ ] "New sandbox order" UI on the Orders page: small form (item, amount, shipping method, billing/shipping country) → redirects to `approvalUrl`
+- [x] "New sandbox order" UI on the Orders page: small form (item, amount, shipping method, billing/shipping country) → redirects to `approvalUrl`
 - [x] `GET /api/orders/paypal-return?token=…`: look up order by `paypal_order_id`, verify `session_id` matches caller, `paypal.captureOrder` → store `paypal_capture_id` and `status = captured` → ingest + score (settings baseline, active weights) → redirect to `/orders/[id]`
 - [ ] On the return path, AI explanation and verification draft via `callWithFallback`: the order flow already takes optional `OrderAiHooks` and saves the rule-based score first; M1-09 supplies the hooks
 - [x] `GET /api/orders/paypal-cancel?token=…`: set `status = cancelled`, redirect to `/orders`
@@ -256,7 +256,7 @@
   - Global daily cap: `LLM_DAILY_CAP` env (default **200**) against `llm_daily_usage` for the current UTC day
   - Increment both counters atomically in one transaction; only increment when allowed
 - [x] `callWithFallback` calls `checkLlmBudget` first (the gate itself is already implemented in `call-with-fallback.ts` against an injected `checkBudget`; this task supplies the real `checkLlmBudget` and binds it). On breach: skip the LLM call, return the rule-based fallback with `usedFallback = true`, log `agent_activity` with `tool_name = 'llm_budget_exceeded'`, `status = 'fallback'`, and `input_summary` naming the limit. **No HTTP 429 anywhere.**
-- [ ] UI shows the visible note "AI unavailable — showing rule-based result." wherever `usedFallback` is true (**moves to M1-11**: there is no UI yet; `usedFallback` is already stored and returned)
+- [x] UI shows the visible note "AI unavailable — showing rule-based result." wherever `usedFallback` is true (order detail page: under the explanation and under the verification draft)
 - [x] `src/middleware.ts`: require a valid NextAuth session on every `/api/*` route **except** `/api/demo/status` and `/api/auth/*`; unauthenticated API calls return 401 JSON
   - **Open decision for you:** `GET /api/orders/paypal-return` and `/paypal-cancel` are browser navigations from PayPal. As specified, the middleware answers a sessionless call with 401 JSON (confirmed live), so the buyer would see raw JSON and the routes' own redirect to `/login` is unreachable. Options: (a) exempt those two paths from the middleware (they still check the session and redirect), or (b) have the middleware redirect to `/login` for them. Not changed, because it alters the exemption list above
 - [x] Add `LLM_DAILY_CAP` to `src/lib/env.ts` and `.env.example` (default 200; verified by `providers.test.ts`)
@@ -290,12 +290,24 @@
 
 ### M1-11 · Orders UI
 
-- [ ] App layout: sidebar nav (all pages); MoneySafe AI logo + tagline "The risk desk for micro-merchants."
-- [ ] Login page (`/login`): NextAuth credentials provider against `DEMO_PASSWORD`
-- [ ] Dashboard placeholder (`/`) with "Coming in M4"
-- [ ] Orders list page (`/orders`): table (ID, buyer, amount, date, risk badge, verdict, demo badge); sortable; skeleton + empty state
-- [ ] `<RiskBadge verdict score />`, `<DemoBadge />`, `<SimulatedBadge />` components
-- [ ] Order detail page (`/orders/[id]`): summary, score display, signal breakdown table, AI explanation card, verification draft card (verify-first only), demo badge
+- [x] App layout: sidebar nav (all pages); MoneySafe AI logo + tagline "The risk desk for micro-merchants."
+- [x] Login page (`/login`): NextAuth credentials provider against `DEMO_PASSWORD`
+- [x] Dashboard placeholder (`/`) with "Coming in M4"
+- [x] Orders list page (`/orders`): table (ID, buyer, amount, date, risk badge, verdict, demo badge); sortable; skeleton + empty state
+- [x] `<RiskBadge verdict score />`, `<DemoBadge />`, `<SimulatedBadge />` components
+- [x] Order detail page (`/orders/[id]`): summary, score display, signal breakdown table, AI explanation card, verification draft card (verify-first only), demo badge
+> M1-11 notes (8 new tests; 354 in total; `npm run build` passes):
+>
+> - **Built with plain Tailwind and no new dependencies** (no shadcn components were added, so the untested `shadcn@2` path stays unused). Files: `src/app/(app)/layout.tsx` (sidebar, logo, tagline, skip link), `(app)/page.tsx` ("Coming in M4"), `(app)/orders/(list)/page.tsx` + `loading.tsx` (skeleton), `(app)/orders/[id]/page.tsx`, `src/app/login/page.tsx`, and in `src/components/`: `badges.tsx` (`RiskBadge`, `DemoBadge`, `SimulatedBadge`), `orders-table.tsx` (sortable), `new-order-form.tsx`, `login-form.tsx`, `sidebar-nav.tsx`. `src/lib/format.ts` holds the pure helpers (tested).
+> - **Pages need a session on the server:** the `(app)` layout redirects to `/login`. Next renders a page in parallel with its layout, so the layout is not the only gate: the pages also return nothing without a session (empty list, `notFound`). A signed-out request for `/orders` was checked to carry no order data.
+> - **Accessibility basics, not a WCAG audit:** risk badges carry text (and screen-reader text), not just colour; sortable headers are buttons with `aria-sort`; labelled form fields with error text tied by `aria-describedby`; `role="alert"` / `role="status"` for messages; visible focus rings; skip link. Not tested with a screen reader or an automated checker.
+> - **Sidebar** shows Disputes, Insights and Agent Activity as disabled "Soon" items rather than links to pages that do not exist yet.
+> - **Login page** shows the demo email and says the password is in the README. It does not print the password (that README line is still to be written, M5-01). `/login` redirects to `/orders` if you are already signed in.
+> - **`loading.tsx` is scoped to the list** with a route group. At the segment level it made a missing order answer 200 instead of 404, because the skeleton streams before `notFound()` runs; found by the live check and fixed.
+> - **Verified live** (dev server, real Supabase, signed in with the demo login, `DEMO_MODE=true` for the run): signed-out `/` and `/orders` redirect to `/login`; `/login` renders the form; the list shows all 10 seeded orders each with "Demo data", and the seed scores 0, 40, 55 and 70 as Ship / Verify first / Hold; five sortable headers; the seed verify order shows its signal breakdown, explanation and draft with no fallback note; the hold and score-0 orders show no draft or explanation card; an unknown or malformed order id returns 404; an order made through the form's API shows the "Demo data" badge and the rule-based note; an unknown `?notice=` value is ignored.
+> - **Not verified:** how the pages look and behave in a real browser (layout, mobile width, the sort buttons, the `<details>` form, the login redirect after a click). The checks fetched server-rendered HTML; no browser was driven. Client-side sorting is covered by unit tests of `sortOrders` only.
+> - **Still open from M1-07b:** a full sandbox payment (create, approve as the buyer in PayPal, return, capture, score) needs a person in a browser with a sandbox buyer account. The form is now there to start it.
+
 
 ---
 
