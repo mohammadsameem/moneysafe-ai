@@ -6,6 +6,8 @@ Notable changes to the spec and architecture, newest first. Task-by-task progres
 ## Deviation log
 One line per deviation from the written specs, newest first.
 
+- 2026-11-09 M3-03 / REQ-EV-01: seeded orders cannot be shipped and their evidence cannot be appended to (409 `shared_example`); they are shared by every session, so changing one would change it for everyone. Shipping works on the session's own orders (sandbox or demo). The real PayPal add-tracking call is implemented but unverified: no sandbox order has ever been captured.
+
 - 2026-11-09 M3-01 / REQ-EV-01: no real carrier tracking API is integrated. AfterShip, TrackingMore and 17TRACK all require an account and an API key created by the project owner, which cannot be done unattended. Tracking events always come from the deterministic mocked provider and are labelled `isMocked: true` ("mocked" badge); `TrackingProvider` is the adapter a real one would implement.
 
 - 2026-11-08 REQ-DIS-05 / M2-07: a live (not simulated) approval asks for one confirmation in the panel before it is sent; simulated approvals do not. The detail page has no route-level skeleton (it would turn a missing dispute's 404 into a 200); the analysing state is the skeleton.

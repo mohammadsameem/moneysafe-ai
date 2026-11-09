@@ -558,11 +558,22 @@
 
 ### M3-03 · Ship order API + evidence endpoints
 
-- [ ] `POST /api/orders/[id]/ship` — validate status = captured;
+- [x] `POST /api/orders/[id]/ship` — validate status = captured;
   - **For non-seed, non-demo orders (and `DEMO_MODE=false`):** call `paypal.addTracking(paypal_order_id, { capture_id: order.paypal_capture_id, tracking_number, carrier, notify_payer: false })` first. On failure, log `error`, return a non-blocking warning, and continue. For seed/demo orders skip the call and log `simulated`.
   - then `paypal.getOrder`; `trackingApi.getTrackingEvents`; `assembleEvidence`; `computeEvidenceCompleteness`; update order; log
-- [ ] `GET /api/orders/[id]/evidence` — artefacts + completeness score
-- [ ] `POST /api/orders/[id]/evidence/communication` — append buyer communication artefact
+- [x] `GET /api/orders/[id]/evidence` — artefacts + completeness score
+- [x] `POST /api/orders/[id]/evidence/communication` — append buyer communication artefact
+
+
+> M3-03 notes (15 new tests; 669 in total):
+>
+> - **`POST /api/orders/[id]/ship`** `{ trackingNumber (4-40 letters/digits/dashes), carrier: USPS|UPS|FEDEX|DHL|OTHER }` (logic in `src/lib/orders/ship.ts`, transaction in `ship-repo.ts`). Only the session's own order, only from `captured`. **Seeded orders are refused (409 `shared_example`)**: they are shared by every judge, so shipping one would change it for everyone (see CHANGES.md).
+> - **PayPal add-tracking** is sent only for a real order (not seed, not demo, `DEMO_MODE` off) that has a capture id: `POST /v2/checkout/orders/{id}/track` with `{ capture_id, tracking_number, carrier, notify_payer: false }` and `PayPal-Request-Id: track-<orderId>`. A failure, or a missing capture id, is a **non-blocking warning** in the response and an `error` activity row; the order still ships. For demo orders and in Demo Mode the step is logged `simulated` and nothing is sent.
+> - Then `getOrder` (falls back to the stored order, logged as a Demo Mode event), the tracking events (mocked), and **one transaction** that inserts the artefacts and moves the order `captured -> shipped` with its completeness, only if it is still `captured`: a double click ships once and stores the evidence once.
+> - **`GET /api/orders/[id]/evidence`**: artefacts (type, source, `isMocked`, time, payload), completeness and the 7-criterion breakdown. Seeds and the session's own orders are readable.
+> - **`POST /api/orders/[id]/evidence/communication`** `{ direction, subject <= 150, body <= 2000, sentAt? }`: appends one `buyer_communication` artefact to a shipped own order and refreshes the order's cached score. Existing evidence is never changed (tested). The message text is untrusted and is never placed in a prompt (the dispute prompts only count messages).
+> - **Verified live** (dev server with `DEMO_MODE=true`, real Supabase, two signed-in sessions): 401 / 400 (bad tracking number, unknown carrier) / 404 (other session) / 409 (seed order, which stayed `captured`); shipping a demo order gave completeness 60, 4 artefacts, PayPal skipped; shipping again was 409 with no new rows; the evidence API returned the split breakdown and mocked events; SEED-A's evidence read 100%; logging a buyer message raised it to 70; activity rows `add_tracking:simulated`, `assemble_evidence`, `log_buyer_communication`. Test rows removed.
+> - **NOT verified: the real add-tracking path and payload.** No sandbox order has ever been captured (that needs a person to approve as a sandbox buyer), so `POST /v2/checkout/orders/{id}/track` has only run against a mocked `fetch`. To check it: create a sandbox order from the Orders page with `DEMO_MODE=false`, approve it as a sandbox buyer, then mark it shipped and look for `add_tracking:success` (or the warning text) in Agent Activity.
 
 ---
 
