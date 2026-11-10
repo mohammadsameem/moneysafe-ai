@@ -870,8 +870,8 @@ The guard itself is built in M1-09b. This task verifies it end to end.
 
 ### M4-09 · Final QA checklist
 
-- [ ] `npm run test` — all unit tests pass
-- [ ] Full demo script:
+- [x] `npm run test` — all unit tests pass
+- [x] Full demo script:
   1. Log in with demo credentials
   2. Orders list: SEED-B amber/Verify first/55; SEED-F red/Hold/70
   3. SEED-B detail: AI explanation, verification draft, 3 active signals (country mismatch, first-time high value, rush shipping)
@@ -886,10 +886,21 @@ The guard itself is built in M1-09b. This task verifies it end to end.
   12. Insights page: pending weight proposal visible; H1–H5 outcomes in breakdown; approve proposal → weights update
   13. Dashboard: Dollars protected > 0 with simulated sub-label; Value under review = $320 (SEED-F)
   14. Reset demo: SEED-C/D/E back in open inbox; H1–H5 in Resolved; proposal recreated; Dollars protected reset
-- [ ] "Demo data" badges on all seed-data components
-- [ ] Double-execution blocked: open SEED-C after approval → "Action already executed" notice; no second action execution row created
-- [ ] LLM fallback: leave `LLM_API_KEY` empty, then set it to an invalid key → "AI unavailable" notes appear; system recommendation shown. With a valid primary and an invalid `LLM_FALLBACK_API_KEY` (and vice versa) the app still works
-- [ ] Live write error: with `DEMO_MODE=false` on a real (non-seed) dispute → error surfaces; retry button appears; same `PayPal-Request-Id` reused on retry
+- [x] "Demo data" badges on all seed-data components
+- [x] Double-execution blocked: open SEED-C after approval → "Action already executed" notice; no second action execution row created
+- [x] LLM fallback: leave `LLM_API_KEY` empty, then set it to an invalid key → "AI unavailable" notes appear; system recommendation shown. With a valid primary and an invalid `LLM_FALLBACK_API_KEY` (and vice versa) the app still works
+- [x] Live write error: with `DEMO_MODE=false` on a real (non-seed) dispute → error surfaces; retry button appears; same `PayPal-Request-Id` reused on retry
+
+
+> M4-09 notes (882 tests): the whole checklist was run against the dev server, nothing mocked, the demo script after a global Reset.
+>
+> - **`npm test`:** 882 passed. Typecheck and lint clean. `npm run build` compiles and generates every page.
+> - **Demo script (steps 1-14), automated** as the `demo1`, `demo2`, `demo3` sections of `npm run qa:browser` (real headless Edge, real clicks; they are one story and run in that order; `demo1` starts with the global Reset button, `demo3` ends with it): 60 checks, 0 failed. Values seen: SEED-B amber "Verify first · 55" with exactly its 3 signals, an AI explanation and a draft; SEED-F red "Hold · 70" with 4 signals and "$320.00 > 3 × $85.00 usual order = $255.00"; Open tab E, D, C (soonest deadline first) as "Shared example", then your 3 copies after Start demo; Resolved tab 5 rows (2 won, 1 lost, 2 refunded); C: 95% Strong Contest, Approve -> "Approved (simulated)", Won -> moves to Resolved, Dollars protected $223 -> $368 with the simulated sub-label; D: 27% Weak Refund, approve -> outcome Refunded on its own, no Simulate control; E: 44% Moderate Contest, evidence gaps, In Transit, red countdown; Insights: proposal, "7 resolved in total", Approve change -> 23; Dashboard $320.00 under review; Reset: E/D/C back as shared examples, H1-H5 resolved, proposal recreated with weight 20, Dollars protected back to $223, sub-label gone.
+> - **"Demo data" badges:** the Dashboard, Orders, an order, the Resolved tab, Insights and Agent Activity carry "Demo data"; the Open inbox and a shared example carry "Shared example".
+> - **Double execution blocked:** reopening an approved dispute says "Action already executed" and offers no Approve; a second `POST .../approve` answers `already_executed`; exactly 1 approval and 1 action execution row exist.
+> - **LLM fallback** (`npm run qa:llm`, one real order per server configuration): no key -> order created in 1.2 s, no model call, "AI unavailable" note, rule-based text; both keys invalid -> created in 2.1 s, three failed attempts per call logged then `fallback`, note shown; valid primary + invalid fallback -> real AI text, no note; invalid primary + valid fallback -> the app still works (order created, note shown), but the fallback provider (Gemini) timed out at 8 s, so "the fallback provider answers when the primary fails" was NOT demonstrated; `npm run llm:check` independently shows Groq PASS 590 ms and Gemini timeout. The fallback code path is covered by unit tests with mocked providers.
+> - **Live write error** (`npm run qa:livewrite`, `DEMO_MODE=false`, a non-demo dispute linked to a PayPal id that does not exist, so the real sandbox answers 404): Approve -> HTTP 502 `execution_failed`, retryable, message names PayPal; 1 approval + 1 execution stored, execution NOT marked done; `paypal_api` rows `error`; the page offers Retry; Retry fails the same way with the SAME approval, execution and PayPal-Request-Id; each attempt logged. The success path of a live write needs a real PayPal dispute (the sandbox cannot give this app one), so it is covered only by `executor.test.ts` with a mocked PayPal.
+> - **Other suites on the same run:** `qa:browser` 285/285 (13 sections together, 379 s), `qa:live` 117/117 (needs `DEMO_MODE=true` on the server), `qa:smoke` 22/22, `db:seed:verify` ALL CHECKS PASSED.
 
 ---
 

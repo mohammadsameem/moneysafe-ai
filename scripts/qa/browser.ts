@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { seedId } from "../../src/seed/ids";
-import { BASE, check as rawCheck, cleanup, closeDb, finish, getSql, guardLocalOnly, info, noteFailure, sleep, waitForResetCooldown } from "./common";
+import { BASE, check as rawCheck, cleanup, count, closeDb, finish, getSql, guardLocalOnly, info, noteFailure, sleep, waitForResetCooldown } from "./common";
 
 /** The last thing the script did or checked: a hang report names it. */
 let lastStep = "(nothing yet)";
@@ -456,6 +456,27 @@ const AUDIT = `(() => {
 })()`;
 
 // ---------------------------------------------------------------------------------------------------
+// Readers for the demo-script sections
+// ---------------------------------------------------------------------------------------------------
+/** The Dashboard's "Dollars protected" figure in dollars, or -1 if the card is not found. */
+const protectedUsd = (page: Page): Promise<number> =>
+  page.eval<number>(`(() => { const h = Array.from(document.querySelectorAll('h2')).find((e) => e.textContent.trim() === 'Dollars protected'); const t = h ? h.parentElement.parentElement.innerText : ''; const m = /\\$([\\d,]+(?:\\.\\d\\d)?)/.exec(t); return m ? Number(m[1].replace(/,/g, '')) : -1; })()`);
+
+/** The Orders-list row for one order (found by its 8-character id) and the colour of its risk badge. */
+const orderRow = (page: Page, orderId: string): Promise<{ text: string; amber: boolean; red: boolean } | null> =>
+  page.eval(`(() => { const r = Array.from(document.querySelectorAll('tbody tr')).find((x) => x.textContent.includes(${JSON.stringify(orderId.slice(0, 8))})); if (!r) return null; return { text: r.innerText.replace(/\\s+/g, ' '), amber: Boolean(r.querySelector('[class*="border-amber-300"]')), red: Boolean(r.querySelector('[class*="border-red-300"]')) }; })()`);
+
+/** What an order's detail page shows: the signals that fired, the explanation and the verification draft. */
+const orderDetail = (page: Page): Promise<{ fired: string[]; explanation: string; draftSubject: string; draftBody: string; text: string }> =>
+  page.eval(`(() => {
+    const rows = Array.from(document.querySelectorAll('table tbody tr'));
+    const fired = rows.filter((r) => r.cells[1] && r.cells[1].textContent.trim() === 'Yes').map((r) => r.cells[0].childNodes[0].textContent.trim());
+    const ai = document.querySelector('section[aria-labelledby="ai"] p');
+    const draft = Array.from(document.querySelectorAll('section[aria-labelledby="draft"] .rounded-md p'));
+    return { fired, explanation: ai ? ai.textContent.trim() : '', draftSubject: draft[0] ? draft[0].textContent.trim() : '', draftBody: draft[1] ? draft[1].textContent.trim() : '', text: document.body.innerText.replace(/\\s+/g, ' ') };
+  })()`);
+
+// ---------------------------------------------------------------------------------------------------
 // Browser launch
 // ---------------------------------------------------------------------------------------------------
 function findBrowser(): string | null {
@@ -721,13 +742,16 @@ async function main(): Promise<void> {
     // QA_SECTIONS=start,pages,hero,tabs,reset,missing,feed picks some; the default is all, in this order. Every section gets
     // its own page object, has a hard time limit (QA_SECTION_MS, default 90 s) and, if it hangs, is abandoned on a fresh tab.
     let C = "";
+    let D = "";
     let E = "";
+    let demoBaseline = 0; // Dollars protected right after a global Reset
     const loadCopies = async (pg: Page): Promise<void> => {
       if (!(await pg.eval<string>("location.origin")).startsWith("http")) await pg.goto("/orders");
       const copies = await pg.eval<Record<string, string>>(
         "fetch('/api/demo/start', { method: 'POST' }).then((r) => r.json()).then((b) => Object.fromEntries(b.copies.map((c) => [c.seedDisputeId, c.disputeId])))",
       );
       C = copies[seedId("dispute", "SEED-C")] ?? "";
+      D = copies[seedId("dispute", "SEED-D")] ?? "";
       E = copies[seedId("dispute", "SEED-E")] ?? "";
     };
 
@@ -1026,6 +1050,161 @@ async function main(): Promise<void> {
     check("  ...and once the server is back the feed recovers by itself, no reload (ok again)", seen[seen.length - 1]?.[0] === "ok", path);
     check("  ...with no overlapping requests and at most one try per interval while failing", page.activityPolls().length >= 4 && page.activityPolls().length <= 6, `${page.activityPolls().length} polls`);
     await page.stopIntercepting();
+      } },
+
+      // ---- M4-09: the demo script from tasks.md, driven through the real UI. demo1 -> demo2 -> demo3 are ONE story and must run
+      // in this order (the default); demo1 starts with a global Reset, demo3 ends with one (step 14).
+      { id: "demo1", title: "Demo script, steps 1-6, after a global Reset", run: async (page) => {
+    const sql = getSql();
+    await page.setViewport(DESKTOP);
+    await page.goto("/");
+    await waitForResetCooldown(sql);
+    check("Reset (all judges) is opened and confirmed", (await page.click("main button", "Reset everything for all judges")) && (await page.click("dialog button", "Reset for everyone")));
+    check("  ...the demo was reset for everyone", await page.waitFor(`document.querySelector('[aria-label="Notifications"]') && document.querySelector('[aria-label="Notifications"]').innerText.includes('Demo reset for everyone')`));
+    await page.goto("/");
+    demoBaseline = await protectedUsd(page);
+    check("  ...the Dashboard is at the seed: Value under review $320.00, no simulated sub-label", (await page.text()).includes("$320.00") && !(await page.text()).includes("from simulated outcomes"), `Dollars protected $${demoBaseline}`);
+
+    // 1. Log in: done once for the whole run through the real form (section 1 of this script).
+    check("1. you are signed in (the session carries a session id)", sid.length > 10);
+
+    // 2. Orders list
+    await page.goto("/orders");
+    const rowB = await orderRow(page, seedId("order", "SEED-B"));
+    const rowF = await orderRow(page, seedId("order", "SEED-F"));
+    check("2. SEED-B is amber, 'Verify first', 55", rowB !== null && rowB.amber && /Verify first\s*\u00b7?\s*55/.test(rowB.text), rowB?.text.slice(0, 80));
+    check("  ...SEED-F is red, 'Hold', 70", rowF !== null && rowF.red && /Hold\s*\u00b7?\s*70/.test(rowF.text), rowF?.text.slice(0, 80));
+
+    // 3. SEED-B
+    await page.goto(`/orders/${seedId("order", "SEED-B")}`);
+    const b = await orderDetail(page);
+    check("3. SEED-B has exactly three active signals: country mismatch, first-time high value, rush shipping", b.fired.length === 3 && b.fired.includes("Billing and shipping countries differ") && b.fired.includes("First-time buyer, high value") && b.fired.includes("Rush or overnight shipping"), b.fired.join(" | "));
+    check("  ...an AI explanation is shown", b.explanation.length > 40, `${b.explanation.length} chars`);
+    check("  ...and a verification draft with a subject and a body", b.draftSubject.length > 3 && b.draftBody.length > 40, `${b.draftSubject.slice(0, 50)}`);
+
+    // 4. SEED-F
+    await page.goto(`/orders/${seedId("order", "SEED-F")}`);
+    const f = await orderDetail(page);
+    check("4. SEED-F has four active signals", f.fired.length === 4, f.fired.join(" | "));
+    check("  ...and shows the threshold: $320.00 > 3 \u00d7 $85.00 usual order = $255.00", f.text.includes("$320.00 > 3 \u00d7 $85.00 usual order = $255.00"));
+
+    // 5. Dispute inbox (Open): three shared examples, soonest deadline first; Start demo gives your own copies
+    await page.goto("/disputes");
+    const open = await page.eval<string[]>(`Array.from(document.querySelectorAll('tbody a[href^="/disputes/"]')).map((a) => a.getAttribute('href'))`);
+    const wantOrder = [seedId("dispute", "SEED-E"), seedId("dispute", "SEED-D"), seedId("dispute", "SEED-C")].map((id) => `/disputes/${id}`);
+    check("5. the Open tab lists SEED-E, SEED-D, SEED-C (deadlines in 40, 48 and 72 hours: soonest first)", JSON.stringify(open) === JSON.stringify(wantOrder), open.map((h) => h.slice(-4)).join(","));
+    check("  ...each labelled 'Shared example'", count(await page.text(), "Shared example") === 3);
+    await page.goto("/");
+    check("  ...Start demo is clicked", await page.click("main button", "Start demo"));
+    check("  ...and the Open tab then lists your own three copies (no 'Shared example')", (await page.waitFor(`location.pathname === '/disputes'`)) && (await page.waitFor(`document.querySelectorAll('tbody a[href^="/disputes/"]').length === 3 && !document.body.innerText.includes('Shared example')`)));
+
+    // 6. Resolved tab: H1-H5 with outcome badges
+    await page.goto("/disputes?tab=resolved");
+    const resolved = await page.eval<{ rows: number; won: number; lost: number; refunded: number }>(`(() => { const t = Array.from(document.querySelectorAll('tbody tr')).map((r) => r.innerText); const n = (w) => t.filter((x) => new RegExp('\\\\b' + w + '\\\\b').test(x)).length; return { rows: t.length, won: n('Won'), lost: n('Lost'), refunded: n('Refunded') }; })()`);
+    check("6. the Resolved tab lists H1-H5: 2 won, 1 lost, 2 refunded", resolved.rows === 5 && resolved.won === 2 && resolved.lost === 1 && resolved.refunded === 2, JSON.stringify(resolved));
+      } },
+
+      { id: "demo2", title: "Demo script, steps 7-11 (your own copies)", run: async (page) => {
+    await loadCopies(page);
+    const gotoText = async (path: string) => {
+      await page.goto(path);
+      return page.text();
+    };
+
+    // 7. SEED-C copy
+    let t = await gotoText(`/disputes/${C}`);
+    check("7. SEED-C: win likelihood 95%, Strong, Contest, 'System recommendation'", /95\s?%/.test(t) && t.includes("Strong") && t.includes("Contest") && t.includes("System recommendation"));
+    check("  ...the evidence vault shows the Delivered scan", /Delivered/.test(t));
+
+    // 8. Approve
+    check("8. Approve is clicked", await page.click("main button", "Approve"));
+    check("  ...a toast says 'Approved (simulated)' and the panel carries the Simulated badge", await page.waitFor(`document.querySelector('[aria-label="Notifications"]').innerText.includes('Approved (simulated)') && document.body.innerText.includes('Action already executed') && document.body.innerText.includes('Simulated')`));
+
+    // 9. Simulate outcome Won
+    check("9. Simulate outcome: Won is clicked", await page.click("main button", "Won"));
+    check("  ...recorded as won", await page.waitFor(`document.body.innerText.includes('Won (simulated outcome)')`));
+    await page.goto("/disputes?tab=resolved");
+    check("  ...SEED-C's copy moved to the Resolved tab", await page.eval<boolean>(`Boolean(document.querySelector('tbody a[href="/disputes/${C}"]'))`));
+    await page.goto("/disputes");
+    check("  ...and left the Open tab", await page.eval<boolean>(`!document.querySelector('tbody a[href="/disputes/${C}"]')`));
+    await page.goto("/");
+    const afterWon = await protectedUsd(page);
+    check(`  ...Dollars protected went up ($${demoBaseline} -> $${afterWon}) with a simulated sub-label`, afterWon > demoBaseline && (await page.text()).includes("from simulated outcomes"));
+
+    // 10. SEED-D: refund; the outcome records itself
+    t = await gotoText(`/disputes/${D}`);
+    check("10. SEED-D: win likelihood 27%, Weak, recommendation Refund", /27\s?%/.test(t) && t.includes("Weak") && /Refund/.test(t));
+    check("  ...Approve (accept claim) is clicked", await page.click("main button", "Approve"));
+    check("  ...the outcome records itself as Refunded", await page.waitFor(`/Refunded/.test(document.body.innerText) && document.body.innerText.includes('Action already executed')`));
+    check("  ...and there is no Simulate outcome control", !(await page.text()).includes("Simulate outcome"));
+    await page.goto("/disputes?tab=resolved");
+    check("  ...SEED-D's copy is in the Resolved tab as Refunded", await page.eval<boolean>(`(() => { const a = document.querySelector('tbody a[href="/disputes/${D}"]'); return Boolean(a) && /Refunded/.test(a.closest('tr').innerText); })()`));
+
+    // 11. SEED-E
+    t = await gotoText(`/disputes/${E}`);
+    check("11. SEED-E: win likelihood 44%, Moderate, Contest", /44\s?%/.test(t) && t.includes("Moderate") && t.includes("Contest"));
+    check("  ...evidence gaps are listed", t.includes("Evidence gaps") && (await page.eval<number>(`(() => { const h = Array.from(document.querySelectorAll('h2')).find((e) => e.textContent.trim() === 'Evidence gaps'); return h ? h.parentElement.querySelectorAll('li').length : 0; })()`)) > 0);
+    check("  ...tracking says In Transit", /in.?transit/i.test(t));
+    check("  ...and the countdown is red (under 48 hours)", await page.eval<boolean>(`Array.from(document.querySelectorAll('[class*="border-red-300"]')).some((e) => /left/.test(e.textContent))`));
+      } },
+
+      { id: "demo3", title: "Demo script, steps 12-14, double execution, Demo data badges", run: async (page) => {
+    const sql = getSql();
+    await page.setViewport(DESKTOP);
+    await loadCopies(page);
+
+    // 12. Insights
+    await page.goto("/insights");
+    let t = await page.text();
+    check("12. Insights: a pending weight proposal, and the outcomes breakdown includes the history (7 resolved: 5 + your 2)", t.includes("Proposed weight change") && /7 resolved in total/.test(t), (/\d+ resolved in total/.exec(t) ?? ["?"])[0]);
+    check("  ...Approve change is clicked", await page.click("main button", "Approve change"));
+    check("  ...the weights update (first-time high value 20 -> 23)", await page.waitFor(`!document.body.innerText.includes('Proposed weight change') && /First-time buyer, high value\\s*(first_time_high_value\\s*)?23/.test(document.body.innerText)`));
+
+    // 13. Dashboard
+    await page.goto("/");
+    t = await page.text();
+    const protectedNow = await protectedUsd(page);
+    check(`13. Dashboard: Dollars protected $${protectedNow} > 0 with a simulated sub-label; Value under review $320.00`, protectedNow > 0 && t.includes("from simulated outcomes") && t.includes("$320.00"));
+
+    // Double execution is blocked
+    await page.goto(`/disputes/${C}`);
+    check("double execution: reopening an approved dispute says 'Action already executed' and offers no Approve button", (await page.text()).includes("Action already executed") && !(await page.eval<boolean>(`Array.from(document.querySelectorAll('main button')).some((b) => b.textContent.trim() === 'Approve')`)));
+    const again = await page.eval<{ status: number; body: string }>(`fetch('/api/disputes/${C}/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'submit_evidence' }) }).then(async (r) => ({ status: r.status, body: JSON.stringify(await r.json()).slice(0, 120) }))`);
+    const [counts] = await sql<{ approvals: number; executions: number }[]>`SELECT (SELECT count(*) FROM approval_records WHERE dispute_id = ${C})::int AS approvals, (SELECT count(*) FROM action_executions WHERE dispute_id = ${C})::int AS executions`;
+    check("  ...a second Approve is answered 'already executed' and creates no second action execution row", /already_executed/.test(again.body) && counts?.approvals === 1 && counts?.executions === 1, `${again.status} ${again.body.slice(0, 60)}; approvals=${counts?.approvals} executions=${counts?.executions}`);
+
+    // 14. Reset
+    await page.goto("/");
+    await waitForResetCooldown(sql);
+    check("14. Reset (all judges) is opened and confirmed", (await page.click("main button", "Reset everything for all judges")) && (await page.click("dialog button", "Reset for everyone")));
+    check("  ...the demo was reset for everyone", await page.waitFor(`document.querySelector('[aria-label="Notifications"]') && document.querySelector('[aria-label="Notifications"]').innerText.includes('Demo reset for everyone')`));
+    await page.goto("/disputes");
+    check("  ...SEED-C, D and E are back in the Open inbox as shared examples", count(await page.text(), "Shared example") === 3);
+    await page.goto("/disputes?tab=resolved");
+    check("  ...H1-H5 are in the Resolved tab", (await page.eval<number>(`document.querySelectorAll('tbody tr').length`)) === 5);
+    await page.goto("/insights");
+    t = await page.text();
+    check("  ...the weight proposal is back and the weights are the defaults (first-time high value 20)", t.includes("Proposed weight change") && /First-time buyer, high value\s*(first_time_high_value\s*)?20/.test(t));
+    await page.goto("/");
+    t = await page.text();
+    const protectedReset = await protectedUsd(page);
+    check(`  ...Dollars protected is back to $${demoBaseline} (is $${protectedReset}), with no simulated sub-label`, protectedReset === demoBaseline && !t.includes("from simulated outcomes"));
+
+    // "Demo data" badges on every seed-data component
+    const badged: Array<[string, string, RegExp]> = [
+      ["/", "Dashboard", /Demo data/],
+      ["/orders", "Orders", /Demo data/],
+      [`/orders/${seedId("order", "SEED-B")}`, "Order detail", /Demo data/],
+      ["/disputes", "Disputes (Open)", /Shared example/],
+      ["/disputes?tab=resolved", "Disputes (Resolved)", /Demo data/],
+      [`/disputes/${seedId("dispute", "SEED-C")}`, "Dispute detail (shared example)", /Demo data|Shared example/],
+      ["/insights", "Insights", /Demo data/],
+      ["/activity", "Agent Activity", /Demo data/],
+    ];
+    for (const [path, label, pattern] of badged) {
+      await page.goto(path);
+      check(`'Demo data' badges: ${label} is labelled`, pattern.test(await page.text()));
+    }
       } },
     ];
 

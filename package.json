@@ -18,7 +18,9 @@
     "qa:live": "tsx --env-file-if-exists=.env.local scripts/qa/live.ts",
     "qa:browser": "tsx --env-file-if-exists=.env.local scripts/qa/browser.ts",
     "qa:smoke": "tsx --env-file-if-exists=.env.local scripts/qa/smoke.ts",
-    "qa:budget": "tsx --env-file-if-exists=.env.local scripts/qa/budget-guard.ts"
+    "qa:budget": "tsx --env-file-if-exists=.env.local scripts/qa/budget-guard.ts",
+    "qa:llm": "tsx --env-file-if-exists=.env.local scripts/qa/llm-modes.ts",
+    "qa:livewrite": "tsx --env-file-if-exists=.env.local scripts/qa/live-write.ts"
   },
   "dependencies": {
     "class-variance-authority": "0.7.1",
