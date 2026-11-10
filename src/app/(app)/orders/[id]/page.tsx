@@ -14,6 +14,7 @@ import { getOrderEvidence } from "@/lib/orders/evidence-service";
 import { buildOrderEvidenceDeps } from "@/lib/orders/runtime";
 import { createDrizzleOrdersRepo } from "@/lib/orders/repo";
 import { signalDetail } from "@/lib/orders/signal-detail";
+import { seedOrderLabel } from "@/seed/labels";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
         <Link href="/orders" className="text-sm text-muted-foreground underline-offset-2 hover:underline">← Orders</Link>
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight">Order <span className="font-mono">{shortId(order.id)}</span></h1>
+          {row.isSeed && seedOrderLabel(row.id) ? <span className="rounded border px-1.5 py-0.5 text-xs font-normal text-muted-foreground">{seedOrderLabel(row.id)}</span> : null}
           <RiskBadge verdict={order.verdict} score={order.riskScore} />
           {order.isDemo ? <DemoBadge /> : null}
         </div>

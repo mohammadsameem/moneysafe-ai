@@ -17,7 +17,8 @@ const COLUMNS: { key: SortKey; label: string; align?: "right"; hide?: "sm" | "md
 ];
 const HIDE: Record<"sm" | "md", string> = { sm: COL_FROM_LG, md: COL_FROM_XL };
 
-export function OrdersTable({ orders }: { orders: OrderSummary[] }) {
+/** `seedLabels` maps the id of a seeded order to its label (SEED-B, H1-ORD...); other orders have none. */
+export function OrdersTable({ orders, seedLabels = {} }: { orders: OrderSummary[]; seedLabels?: Record<string, string> }) {
   const [key, setKey] = useState<SortKey>("date");
   const [direction, setDirection] = useState<SortDirection>("desc");
   const rows = useMemo(() => sortOrders(orders, key, direction), [orders, key, direction]);
@@ -72,6 +73,7 @@ export function OrdersTable({ orders }: { orders: OrderSummary[] }) {
                 <Link href={`/orders/${o.id}`} className="underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   {shortId(o.id)}
                 </Link>
+                {seedLabels[o.id] ? <span className="block font-sans text-xs text-muted-foreground">{seedLabels[o.id]}</span> : null}
               </td>
               <td className={`px-4 py-2 ${HIDE.sm}`}>{o.buyerEmail}</td>
               <td className="px-3 py-2 text-right tabular-nums sm:px-4">{formatUsd(o.amountUsd, o.currency)}</td>

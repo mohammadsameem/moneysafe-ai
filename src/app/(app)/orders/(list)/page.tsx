@@ -4,6 +4,7 @@ import { OrdersTable } from "@/components/orders-table";
 import { createDrizzleReadRepo, toOrderSummary } from "@/lib/orders/queries";
 import { ORDER_NOTICES, isOrderNoticeKey } from "@/lib/orders/notices";
 import { getSessionId } from "@/lib/session";
+import { seedOrderLabels } from "@/seed/labels";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Orders · MoneySafe AI" };
@@ -24,7 +25,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: { not
         <p role="status" className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">{notice}</p>
       ) : null}
       <NewOrderForm />
-      <OrdersTable orders={rows.map(toOrderSummary)} />
+      <OrdersTable orders={rows.map(toOrderSummary)} seedLabels={seedOrderLabels(rows.filter((r) => r.isSeed).map((r) => r.id))} />
     </div>
   );
 }

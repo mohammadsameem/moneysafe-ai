@@ -10,7 +10,7 @@ export function JudgeGuide() {
       <h2 id="judge-guide" className="font-medium">Judge guide: try it in five steps</h2>
       <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm">
         <li>
-          <Link href="/orders" className={link}>See Orders</Link>: each risk score lists the explainable signals that fired. SEED-B is &ldquo;Verify first&rdquo;, SEED-F is &ldquo;Hold&rdquo;.
+          <Link href="/orders" className={link}>See Orders</Link>: each risk score lists the explainable signals that fired. SEED-B ($210) is &ldquo;Verify first&rdquo;, SEED-F ($320) is &ldquo;Hold&rdquo;.
         </li>
         <li>
           <strong>Start demo</strong> (the button below): you get your own copies of the three open example disputes, ready to use.
