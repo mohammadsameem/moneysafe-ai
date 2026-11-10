@@ -16,6 +16,7 @@ import { ACCEPT_CLAIM_NOTE, EVIDENCE_NOTES_MAX_CHARS, buildProvideEvidencePayloa
 import { isAnalysed } from "./analysis-state";
 import { createApprovalWithExecution, resolveApprovalState, type ApprovalState } from "./approval";
 import { executeApproved, type ExecutorDeps } from "./executor";
+import { isRealDispute } from "./paypal-reason";
 import { toDisputeView, type DisputeView } from "./read";
 import { ApprovalConflictError, type DisputeActionType, type DisputesRepo } from "./types";
 
@@ -25,6 +26,11 @@ export interface ApproveDeps {
   newRequestId?: () => string;
   now?: () => Date;
   log?: (meta: ActivityMeta) => Promise<void>;
+  /**
+   * For a REAL PayPal dispute only: a fresh check that PayPal allows this action now and that nothing would be simulated.
+   * Production always provides it (see runtime.ts); it is optional only so the demo-data tests stay as they are.
+   */
+  liveGate?: (dispute: Dispute, action: DisputeActionType) => Promise<{ ok: true } | { ok: false; message: string }>;
 }
 
 export interface ActionRequest {
@@ -56,7 +62,9 @@ export type ApproveResult =
   | { kind: "not_analyzed" }
   | { kind: "wrong_action"; expected: DisputeActionType }
   | { kind: "not_open" }
-  | { kind: "invalid"; message: string };
+  | { kind: "invalid"; message: string }
+  /** A real PayPal dispute where PayPal does not allow this action now (or cannot be read). Nothing was stored or sent. */
+  | { kind: "live_blocked"; message: string };
 
 export function expectedAction(finalRecommendation: Dispute["finalRecommendation"]): DisputeActionType | null {
   if (finalRecommendation === "contest") return "submit_evidence";
@@ -111,6 +119,12 @@ export async function approveDispute(req: ApproveRequest, deps: ApproveDeps): Pr
   // BRANCH A: already executed. Insert nothing, send nothing.
   if (state.kind === "already_executed") {
     return { kind: "already_executed", execution: publicExecution(state.execution), view: await reread() };
+  }
+
+  // A REAL PayPal dispute: only an action PayPal allows right now may go ahead, before anything is stored or sent.
+  if (deps.liveGate && isRealDispute(dispute)) {
+    const gate = await deps.liveGate(dispute, req.action);
+    if (!gate.ok) return { kind: "live_blocked", message: gate.message };
   }
 
   let retried = state.kind === "retry";

@@ -10,6 +10,7 @@ import { AnalysisTrigger } from "@/components/disputes/analysis-trigger";
 import { ApprovalPanel } from "@/components/disputes/approval-panel";
 import { DisputeTimeline } from "@/components/disputes/dispute-timeline";
 import { EvidenceChips } from "@/components/disputes/evidence-chips";
+import { PayPalStatusCard } from "@/components/disputes/paypal-status-card";
 import { RecommendationCard } from "@/components/disputes/recommendation-card";
 import { WinLikelihoodMeter } from "@/components/disputes/win-likelihood-meter";
 import { ToneBadge } from "@/components/tone-badge";
@@ -67,6 +68,8 @@ export default async function DisputeDetailPage({ params }: { params: { id: stri
           </blockquote>
         ) : null}
       </header>
+
+      {detail.live ? <PayPalStatusCard live={detail.live} /> : null}
 
       {analysis === null ? (
         resolved ? (

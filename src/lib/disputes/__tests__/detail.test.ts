@@ -5,14 +5,25 @@ import { derivePanelState, loadDisputeDetail } from "../detail";
 import { toDisputeView } from "../read";
 import { demoCopyId } from "@/lib/demo/ids";
 import { DISPUTE_ID, NOW, ORDER_ID, OTHER_SESSION, SESSION, analysed, createFakeDisputesRepo, makeDispute, makeRecord } from "./fakes";
+import { createFakePayPal } from "@/lib/orders/__tests__/fakes";
 import { PayPalError, type PayPalClient } from "@/lib/paypal";
 
 type Over = Parameters<typeof analysed>[0];
+const LIVE_BOTH_ALLOWED = {
+  dispute_id: "PP-D-1",
+  status: "WAITING_FOR_SELLER_RESPONSE",
+  dispute_life_cycle_stage: "CHARGEBACK",
+  allowed_response_options: { provide_evidence: {}, accept_claim: { accept_claim_types: ["REFUND"] } },
+};
 const failingPayPal = () => ({ request: async () => { throw new PayPalError("PayPal could not be reached"); } }) as unknown as PayPalClient;
 
 function setup(over: Over = {}, opts: { demoMode?: boolean } = {}) {
   const repo = createFakeDisputesRepo([makeRecord(analysed({ isSeed: false, isDemo: false, paypalDisputeId: "PP-D-1", ...over }))], artefactRows(ORDER_ID, SEED_C));
-  const deps = { repo, paypal: null, demoMode: opts.demoMode ?? false, now: () => NOW };
+  // A PayPal-linked, non-demo dispute is a REAL one: the page reads PayPal and offers only what PayPal allows. Here PayPal
+  // allows both actions (a dispute at the chargeback stage), so these tests are about the panel states, not the live gate
+  // (live-dispute.test.ts covers that).
+  const paypal = createFakePayPal({ "GET /v1/customer/disputes/PP-D-1": LIVE_BOTH_ALLOWED });
+  const deps = { repo, paypal, demoMode: opts.demoMode ?? false, now: () => NOW };
   return { repo, deps };
 }
 const load = (deps: ReturnType<typeof setup>["deps"], sessionId = SESSION) => loadDisputeDetail(DISPUTE_ID, sessionId, deps);

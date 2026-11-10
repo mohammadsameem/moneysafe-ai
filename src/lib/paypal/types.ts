@@ -87,6 +87,13 @@ export const PayPalDisputeSchema = z.object({
   seller_response_due_date: z.string().optional(),
   create_time: z.string().optional(),
   update_time: z.string().optional(),
+  /** Present on the single-dispute read, not on list items. `seller_transaction_id` is the capture id the app stores. */
+  disputed_transactions: z
+    .array(z.object({ seller_transaction_id: z.string().optional(), buyer_transaction_id: z.string().optional() }).passthrough())
+    .optional(),
+  /** What the seller may do right now, as an object keyed by action (accept_claim, make_offer, ...). Read defensively. */
+  allowed_response_options: z.unknown().optional(),
+  messages: z.array(z.object({ posted_by: z.string().optional(), content: z.string().optional() }).passthrough()).optional(),
 });
 
 export const ListDisputesResponseSchema = z.object({

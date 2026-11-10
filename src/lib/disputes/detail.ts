@@ -10,7 +10,8 @@ import { shouldSimulateWrite } from "@/lib/paypal";
 import { isAnalysed } from "./analysis-state";
 import { resolveApprovalState, type ApprovalState } from "./approval";
 import { expectedAction } from "./approve";
-import { getDisputeView, isResolvedStatus, type DisputeReadDeps, type DisputeView } from "./read";
+import { liveBlockReason, type LiveDisputeInfo } from "./paypal-reason";
+import { getDisputeView, isResolvedStatus, readLiveDispute, type DisputeReadDeps, type DisputeView } from "./read";
 import { demoCopyId } from "@/lib/demo/ids";
 import { canSimulateOutcome } from "./simulate";
 import type { DisputeActionType, DisputesRepo } from "./types";
@@ -27,7 +28,9 @@ export type PanelState =
   /** Resolved with no action taken here (the seeded history). */
   | { mode: "resolved" }
   /** An open shared seed (M3-08): read-only; "Start demo" opens this session's copy, `copyId`. */
-  | { mode: "shared_example"; copyId: string };
+  | { mode: "shared_example"; copyId: string }
+  /** A real PayPal dispute where PayPal does not allow the recommended action right now (or cannot be read): no write button. */
+  | { mode: "blocked"; action: DisputeActionType; message: string };
 
 export interface EvidenceSummary {
   count: number;
@@ -43,6 +46,8 @@ export interface DisputeDetail {
   history: { approvals: ApprovalRecord[]; executions: ActionExecution[] };
   /** True when approving would be simulated (Demo Mode, or a seeded / demo dispute). */
   willSimulate: boolean;
+  /** What PayPal says about this dispute right now; null unless it is a real PayPal dispute. */
+  live: LiveDisputeInfo | null;
   /** REQ-DIS-11: the session's own demo dispute, evidence submitted, not yet resolved (contest path only). */
   canSimulateOutcome: boolean;
   renderedAt: string;
@@ -104,15 +109,25 @@ export async function loadDisputeDetail(id: string, sessionId: string, deps: Det
 
   const latestAt = artefacts.reduce<string | null>((latest, a) => (latest === null || a.createdAt > latest ? a.createdAt : latest), null);
   const now = (deps.now ?? (() => new Date()))();
+
+  let panel: PanelState =
+    dispute.isSeed && !isResolvedStatus(dispute.status)
+      ? { mode: "shared_example", copyId: demoCopyId(sessionId, dispute.id) }
+      : derivePanelState(view, dispute.analysisComputedAt, state, history.approvals);
+  // A real PayPal dispute: read it fresh, and offer a write only if PayPal allows that action right now.
+  const live = await readLiveDispute({ dispute, order }, sessionId, deps);
+  if (live && (panel.mode === "decide" || panel.mode === "retry")) {
+    const reason = liveBlockReason(live, panel.action);
+    if (reason) panel = { mode: "blocked", action: panel.action, message: reason };
+  }
+
   return {
     view,
     order: { id: order.id, riskScore: order.riskScore, verdict: order.verdict },
     evidence: { count: artefacts.length, latestAt },
-    panel:
-      dispute.isSeed && !isResolvedStatus(dispute.status)
-        ? { mode: "shared_example", copyId: demoCopyId(sessionId, dispute.id) }
-        : derivePanelState(view, dispute.analysisComputedAt, state, history.approvals),
+    panel,
     history,
+    live,
     willSimulate: shouldSimulateWrite(dispute, deps.demoMode),
     canSimulateOutcome: canSimulateOutcome(
       dispute,

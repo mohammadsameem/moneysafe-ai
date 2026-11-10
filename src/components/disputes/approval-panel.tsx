@@ -144,6 +144,13 @@ export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate, canSi
 
       {panel.mode === "resolved" ? <p className="text-sm text-muted-foreground">This dispute is resolved. There is nothing left to approve.</p> : null}
 
+      {panel.mode === "blocked" ? (
+        <div role="note" className="space-y-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-950">
+          <p className="font-medium">Nothing can be sent to PayPal right now</p>
+          <p>{panel.message}</p>
+        </div>
+      ) : null}
+
       {panel.mode === "shared_example" ? (
         <div className="space-y-3">
           <div role="note" className="rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-950">

@@ -66,5 +66,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       return NextResponse.json({ error: "not_open", message: "This dispute is no longer open." }, { status: 409 });
     case "invalid":
       return NextResponse.json({ error: "invalid", message: result.message }, { status: 400 });
+    case "live_blocked":
+      return NextResponse.json({ error: "live_blocked", message: result.message }, { status: 409 });
   }
 }

@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { DemoBadge } from "@/components/badges";
 import { DeadlineCountdown } from "@/components/deadline-countdown";
+import { SyncPayPalButton } from "@/components/disputes/sync-paypal-button";
 import { StartDemoButton } from "@/components/demo/start-demo-button";
+import { isDemoModeEnabled } from "@/lib/env";
+import { getPayPalClient } from "@/lib/paypal";
 import { COL_FROM_LG } from "@/components/table-columns";
 import { ToneBadge } from "@/components/tone-badge";
 import { formatDate, shortId } from "@/lib/format";
@@ -23,6 +26,8 @@ export default async function DisputesPage({ searchParams }: { searchParams: { t
   const sessionId = await getSessionId();
   const disputes = sessionId ? await listDisputeViews(sessionId, tab, buildReadDeps()) : [];
   const renderedAt = new Date().toISOString();
+  // The button only exists where it can work: live mode with PayPal credentials.
+  const canCheckPayPal = !isDemoModeEnabled() && getPayPalClient() !== null;
 
   return (
     <div className="space-y-4">
@@ -33,9 +38,17 @@ export default async function DisputesPage({ searchParams }: { searchParams: { t
             {tab === "open" ? "Soonest deadline first. Open a dispute to see the recommendation and approve an action." : "Most recently resolved first."}
           </p>
         </div>
-        <div className="flex flex-col items-end gap-1">
-          <StartDemoButton />
-          <p className="text-xs text-muted-foreground">Your own copies of the example disputes</p>
+        <div className="flex flex-wrap items-start justify-end gap-4">
+          {canCheckPayPal ? (
+            <div className="flex flex-col items-end gap-1">
+              <SyncPayPalButton />
+              <p className="text-xs text-muted-foreground">Links real PayPal disputes on your own orders</p>
+            </div>
+          ) : null}
+          <div className="flex flex-col items-end gap-1">
+            <StartDemoButton />
+            <p className="text-xs text-muted-foreground">Your own copies of the example disputes</p>
+          </div>
         </div>
       </div>
 

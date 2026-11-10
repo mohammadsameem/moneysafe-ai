@@ -16,6 +16,7 @@ import { analyseDispute, assessDispute, draftDisputeResponse, type DisputeSubjec
 import type { ExplainerDeps } from "@/lib/ai/risk-explainer";
 import type { CostAssumptions } from "@/lib/env";
 import { CLAIM_STALE_MS, isAnalysed, newClaimToken } from "./analysis-state";
+import { paypalReasonNote } from "./paypal-reason";
 import { toDisputeView, type DisputeView } from "./read";
 import type { AnalysisPatch, DisputeRecord, DisputesAnalysisRepo } from "./types";
 
@@ -133,7 +134,8 @@ async function runClaimedAnalysis(
       overrideRecommendation: analysis.overrideRecommendation,
       finalRecommendation: analysis.finalRecommendation,
       recommendationSource: analysis.recommendationSource,
-      reasoning: analysis.reasoning,
+      // A dispute that came from PayPal says so, with PayPal's own reason (and how it was mapped if the app has no exact category).
+      reasoning: [analysis.reasoning, paypalReasonNote(dispute.buyerMessage)].filter((s): s is string => Boolean(s)).join(" "),
       evidenceUsed: analysis.evidenceUsed,
       evidenceGaps: analysis.evidenceGaps,
       draftResponse,

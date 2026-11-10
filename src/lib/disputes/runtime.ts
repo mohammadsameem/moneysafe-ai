@@ -8,7 +8,9 @@ import type { ApproveDeps } from "./approve";
 import type { DetailDeps } from "./detail";
 import type { DisputeReadDeps } from "./read";
 import { buildOutcomeHook } from "@/lib/insights/runtime";
-import { createDrizzleDisputesRepo, createDrizzleSimulationRepo } from "./repo";
+import type { IngestDeps } from "./ingest";
+import { createLiveGate } from "./live-gate";
+import { createDrizzleDisputesRepo, createDrizzleIngestRepo, createDrizzleSimulationRepo } from "./repo";
 import type { SimulationDeps } from "./simulate";
 
 export function buildReadDeps(): DisputeReadDeps {
@@ -40,7 +42,13 @@ export function buildApproveDeps(): ApproveDeps {
       onOutcomeRecorded: buildOutcomeHook(),
     },
     log: logActivity,
+    // A real PayPal dispute is acted on only if PayPal allows that action right now (and is never simulated).
+    liveGate: createLiveGate(getPayPalClient(), isDemoModeEnabled()),
   };
+}
+
+export function buildIngestDeps(): IngestDeps {
+  return { repo: createDrizzleIngestRepo(), paypal: getPayPalClient(), demoMode: isDemoModeEnabled(), log: logActivity };
 }
 
 export function buildSimulationDeps(): SimulationDeps {

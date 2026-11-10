@@ -12,6 +12,7 @@ import { getDispute, withDemoFallback, type PayPalClient } from "@/lib/paypal";
 import { demoCopyId } from "@/lib/demo/ids";
 import { isAnalysed } from "./analysis-state";
 import { computeDeadline } from "./deadline";
+import { allowedActions, isRealDispute, type LiveDisputeInfo } from "./paypal-reason";
 import type { DisputeRecord, DisputesReadRepo } from "./types";
 
 export const RESOLVED_STATUSES = ["resolved_won", "resolved_lost", "resolved_refunded"] as const;
@@ -147,6 +148,41 @@ async function liveDeadline(record: DisputeRecord, sessionId: string, deps: Disp
   );
   const due = result.data;
   return due && !Number.isNaN(new Date(due).getTime()) ? new Date(due).toISOString() : null;
+}
+
+/**
+ * A fresh read of a REAL PayPal dispute: its real status and stage, the due date and what PayPal allows now. Null for any
+ * other dispute. Never falls back to stored data: when PayPal cannot be read, `readFailed` says so and no write is offered.
+ */
+export async function readLiveDispute(record: DisputeRecord, sessionId: string, deps: DisputeReadDeps): Promise<LiveDisputeInfo | null> {
+  const { dispute: d } = record;
+  if (!isRealDispute(d)) return null;
+  const paypalDisputeId = d.paypalDisputeId!;
+  const empty: LiveDisputeInfo = { paypalDisputeId, reasonCode: null, status: null, state: null, stage: null, dueDate: null, allowed: [], readFailed: null };
+  if (deps.demoMode) return { ...empty, readFailed: "Demo Mode is on, so PayPal is not contacted and this real dispute cannot be acted on." };
+  if (!deps.paypal) return { ...empty, readFailed: "PayPal credentials are not configured." };
+
+  const started = Date.now();
+  try {
+    const live = await getDispute(deps.paypal, paypalDisputeId);
+    try {
+      await deps.log?.({ sessionId, refDisputeId: d.id, stepType: "paypal_api", toolName: "get_dispute", inputSummary: "read the live dispute from PayPal", outputSummary: `status ${live.status}; stage ${live.dispute_life_cycle_stage ?? "?"}`, durationMs: Date.now() - started, status: "success" });
+    } catch {
+      /* logging is best effort */
+    }
+    return {
+      paypalDisputeId,
+      reasonCode: live.reason ?? null,
+      status: live.status,
+      state: live.dispute_state ?? null,
+      stage: live.dispute_life_cycle_stage ?? null,
+      dueDate: live.seller_response_due_date && !Number.isNaN(Date.parse(live.seller_response_due_date)) ? new Date(live.seller_response_due_date).toISOString() : null,
+      allowed: allowedActions(live.allowed_response_options),
+      readFailed: null,
+    };
+  } catch {
+    return { ...empty, readFailed: "PayPal could not be read right now." };
+  }
 }
 
 export type DisputeTab = "open" | "resolved";

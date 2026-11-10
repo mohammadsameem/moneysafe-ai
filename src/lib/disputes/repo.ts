@@ -16,6 +16,7 @@ import {
 } from "@/db/schema";
 import { isUuid } from "@/lib/orders/queries";
 import { CLAIM_PREFIX, CLAIM_TIME_LENGTH, CLAIM_TIME_START } from "./analysis-state";
+import type { IngestRepo } from "./ingest";
 import type { SimulationRepo } from "./simulate";
 import {
   ApprovalConflictError,
@@ -216,6 +217,30 @@ export function createDrizzleDisputesRepo(db: Db = getDb()): DisputesRepo {
         if (recorded) counterAfter = await bumpResolvedCounter(tx);
         return { applied: true, execution, outcomeRecorded: recorded, counterAfter };
       });
+    },
+  };
+}
+
+/** What linking a real PayPal dispute needs (see ingest.ts). Every lookup is scoped to the calling session. */
+export function createDrizzleIngestRepo(db: Db = getDb()): IngestRepo {
+  return {
+    async findOwnRealOrderByCapture(sessionId, captureId) {
+      const rows = await db
+        .select()
+        .from(orders)
+        .where(and(eq(orders.paypalCaptureId, captureId), eq(orders.sessionId, sessionId), eq(orders.isSeed, false), eq(orders.isDemo, false)))
+        .limit(1);
+      return rows[0] ?? null;
+    },
+
+    async findDisputeByPaypalId(paypalDisputeId) {
+      const rows = await db.select({ id: disputes.id, sessionId: disputes.sessionId }).from(disputes).where(eq(disputes.paypalDisputeId, paypalDisputeId)).limit(1);
+      return rows[0] ?? null;
+    },
+
+    async insertDispute(values) {
+      const rows = await db.insert(disputes).values(values).onConflictDoNothing().returning({ id: disputes.id });
+      return rows.length > 0;
     },
   };
 }
