@@ -911,7 +911,7 @@ The guard itself is built in M1-09b. This task verifies it end to end.
 
 ### M5-01 · README
 
-- [ ] Write `README.md`:
+- [x] Write `README.md`:
   - Project name, tagline, short description (2–3 sentences)
   - Live demo URL (Vercel)
   - Public demo credentials (email + password) prominently displayed
@@ -921,6 +921,9 @@ The guard itself is built in M1-09b. This task verifies it end to end.
   - Architecture overview (stack, data flow, 3–4 sentences)
   - Link to Devpost submission
   - Screenshots (inline markdown images)
+
+
+> M5-01 notes: `README.md` is rewritten (it was the create-next-app boilerplate). It has the tagline, a "Try it" path with the demo login (email `demo@moneysafe.ai`; the password is on the login page and is `DEMO_PASSWORD` in the deployment), a **"What is live and what is simulated"** table, the screenshots section, a one-command local setup, the environment variable table (names, defaults, effect), the free-tier `LLM_DAILY_CAP` note, how it works, the test and QA commands and the tech list. **Placeholders left for the owner:** the live URL, the Devpost link, the video link and the seven screenshots (M5-02, M5-03). Claims in it were checked against the code (six signals, 10 model calls per session per hour, the 10-second reset cooldown, Node 18.17 as Next 14's minimum; it has only been run on Node 26).
 
 ---
 
@@ -959,6 +962,9 @@ The guard itself is built in M1-09b. This task verifies it end to end.
   - Tech stack bullet list
   - Screenshots (reuse from M5-02)
   - Demo video link
+
+
+> M5-05 notes: `DEVPOST_DRAFT.md` is written (Inspiration, What it does, How it works, a "What is real, and what is simulated" section, Challenges, Accomplishments, What's next, Built with). It uses only things that were built and measured; the owner still has to fill the link placeholders and paste it into the Devpost form, so the box stays open. One claim from this task's outline was deliberately NOT repeated: "no list endpoint" for PayPal disputes (the app implements `listDisputes`), and "provide-evidence payload quirks" (no specific quirk was recorded).
 
 ---
 
