@@ -30,12 +30,14 @@ The pages: a **Dashboard** (value under review, disputes won, dollars protected,
 We want to be exact about this, because the demo runs on PayPal's sandbox.
 
 - **Real:** the PayPal sandbox order flow (create, buyer approval, capture) and add-tracking; the risk scoring; the evidence, win-probability and expected-value logic; the model calls (Groq, with an optional Gemini fallback); the approval gate and idempotency; the budget guard.
-- **Simulated:** every dispute in the demo is local data, because the sandbox cannot create disputes for an app. Approving a demo dispute therefore simulates the PayPal call and carries a "Simulated" badge, and Won / Lost outcomes are simulated with a control and labelled everywhere. Carrier scan events are mocked; there is no tracking provider. The history the learning loop starts from is seeded.
-- **Tested against the real sandbox:** the failure and retry path of a live dispute write (PayPal answers 404, the app reports it, offers Retry, and reuses the same request id). The success path of a live dispute write has only been tested with a mocked PayPal.
+- **Real disputes:** a sandbox buyer can open a dispute in the Resolution Center. The app reads it through the PayPal Disputes API, matches it to a real captured order in the owner's session only (no other visitor can see or act on it), and shows PayPal's own status, stage, due date and allowed actions. At the inquiry stage PayPal allows a refund or an offer, not evidence, so the app offers the refund and no evidence button. Approval goes through the same approval gate to a live PayPal call, never simulated, with the same `PayPal-Request-Id` on retry. We ran this on a real $230 sandbox dispute: it was linked to the right order, analysed by the live model (5% win likelihood, refund recommended, because that order had not been shipped and so had no evidence), and PayPal's real status and allowed actions were shown.
+- **Simulated:** **Start demo** and the seeded disputes are example data, not PayPal disputes. Approving one simulates the PayPal call and carries a "Simulated" badge, and Won / Lost outcomes are simulated with a control and labelled everywhere. Carrier scan events are mocked; there is no tracking provider. The history the learning loop starts from is seeded.
+- **Tested against the real sandbox:** reading and matching a real dispute, its live status and allowed actions, and the failure and retry path of a live dispute write (PayPal answers 404, the app reports it, offers Retry, and reuses the same request id).
+- **Not yet run:** a successful live refund or evidence submission on a real dispute. That path has only been tested with a mocked PayPal.
 
 ## Challenges
 
-- **The sandbox has no disputes for us.** We designed the demo so that seeded disputes are read-only shared examples, "Start demo" gives each visitor their own copies, and every simulated step is labelled, so a judge can run the whole loop without touching anyone else's data.
+- **A dispute only exists once a buyer opens one.** In the sandbox that means a buyer account opening a case in the Resolution Center, so a judge cannot trigger a real one on demand, and a real one can be limited by its stage (at the inquiry stage PayPal does not allow evidence). We built the demo around labelled examples: seeded disputes are read-only shared examples, "Start demo" gives each visitor their own copies, and every simulated step is marked, so a judge can run the whole loop without touching anyone else's data. Real disputes are supported alongside them and kept strictly to their owner.
 - **One shared database for many judges.** Seeds cannot be approved, sessions are isolated by copies, the weights are shared on purpose, and there is a "Restart my demo" for you alone and a "Reset everything for all judges" with a cooldown and an audit row.
 - **A hang that only showed up through a connection pooler.** Two queries pipelined on one connection through Supabase's transaction pooler left a transaction open until the statement timeout. We measured it and set one query in flight per connection.
 - **Free-tier model limits.** A global daily cap and a per-session hourly cap stop a visitor from exhausting the quota; past the cap everything keeps working with rule-based text. We checked it end to end: the calls after the cap are fallbacks, not errors, and the seeded pages need no model at all.
@@ -54,7 +56,7 @@ We want to be exact about this, because the demo runs on PayPal's sandbox.
 - Per-visitor database isolation instead of shared weights.
 - More dispute reasons than "item not received" and "not as described".
 - A real carrier tracking API in place of mocked scan events.
-- A real sandbox dispute once PayPal exposes one to app developers, to exercise the live write end to end.
+- Run a real dispute through to a successful live refund or evidence submission, and support PayPal's make-offer response.
 
 ## Built with
 
