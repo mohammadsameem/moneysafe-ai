@@ -71,6 +71,10 @@ export const PayPalErrorBodySchema = z.object({
   name: z.string().optional(),
   message: z.string().optional(),
   debug_id: z.string().optional(),
+  /** PayPal's per-problem detail: which field, which issue code, and a description. */
+  details: z
+    .array(z.object({ field: z.string().optional(), issue: z.string().optional(), description: z.string().optional(), value: z.unknown().optional() }).passthrough())
+    .optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -93,6 +97,8 @@ export const PayPalDisputeSchema = z.object({
     .optional(),
   /** What the seller may do right now, as an object keyed by action (accept_claim, make_offer, ...). Read defensively. */
   allowed_response_options: z.unknown().optional(),
+  /** Present once PayPal has closed the dispute, e.g. { outcome_code: "RESOLVED_BUYER_FAVOUR", outcome_reason: "SELLER_ISSUED_REFUND" }. */
+  dispute_outcome: z.object({ outcome_code: z.string().optional(), outcome_reason: z.string().optional() }).passthrough().optional(),
   messages: z.array(z.object({ posted_by: z.string().optional(), content: z.string().optional() }).passthrough()).optional(),
 });
 

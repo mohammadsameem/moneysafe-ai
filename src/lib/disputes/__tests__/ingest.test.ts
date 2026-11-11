@@ -148,6 +148,39 @@ describe("ingestPayPalDisputes", () => {
     expect(await ingestPayPalDisputes(SESSION, deps)).toMatchObject({ kind: "ok", linked: [], skipped: { failed: 1 } });
   });
 
+  it("a sync records PayPal's closure on a dispute this session already linked: resolved, no approval/execution/outcome", async () => {
+    const calls: Array<{ id: string; status: string; outcome: string | null; note: string }> = [];
+    const resolution = {
+      markResolvedOnPayPal: async (i: { id: string; status: string; outcome: string | null; note: string }) => {
+        calls.push(i);
+        return {} as never;
+      },
+    };
+    const closedDetail = detail({ status: "RESOLVED", dispute_state: "RESOLVED", dispute_outcome: { outcome_code: "RESOLVED_BUYER_FAVOUR", outcome_reason: "SELLER_ISSUED_REFUND" } });
+    const { deps, inserted } = setup([realOrder()], [{ id: localDisputeId(PP), paypalDisputeId: PP, sessionId: SESSION }], {
+      resolution,
+      paypal: createFakePayPal({ [LIST]: { items: [listItem({ status: "RESOLVED" })] }, [`GET /v1/customer/disputes/${PP}`]: closedDetail }),
+    });
+    const result = await ingestPayPalDisputes(SESSION, deps);
+    expect(result).toMatchObject({ kind: "ok", closedOnPayPal: 1, linked: [] });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ id: localDisputeId(PP), status: "resolved_refunded", outcome: "refunded" });
+    expect(calls[0]!.note).toContain("buyer's favour");
+    expect(inserted).toHaveLength(0);
+  });
+
+  it("a sync never closes a dispute that belongs to another session, or one it never linked", async () => {
+    for (const existing of [[{ id: localDisputeId(PP), paypalDisputeId: PP, sessionId: OTHER_SESSION }], []]) {
+      let touched = 0;
+      const { deps } = setup([realOrder()], existing, {
+        resolution: { markResolvedOnPayPal: async () => (touched++, null) },
+        paypal: createFakePayPal({ [LIST]: { items: [listItem({ status: "RESOLVED" })] } }),
+      });
+      expect(await ingestPayPalDisputes(SESSION, deps)).toMatchObject({ kind: "ok", closedOnPayPal: 0 });
+      expect(touched).toBe(0);
+    }
+  });
+
   it("only reads: it never POSTs to PayPal", async () => {
     const { deps, paypal } = setup([realOrder()]);
     await ingestPayPalDisputes(SESSION, deps);

@@ -11,7 +11,7 @@
  * Only the sandbox is in scope; the base URL is a parameter, not a feature.
  */
 import type { z } from "zod";
-import { PayPalError } from "./errors";
+import { PayPalError, describeIssues, type PayPalIssue } from "./errors";
 import { PayPalErrorBodySchema, TokenResponseSchema } from "./types";
 
 export const PAYPAL_SANDBOX_BASE_URL = "https://api-m.sandbox.paypal.com";
@@ -68,17 +68,24 @@ export function createPayPalClient(options: PayPalClientOptions): PayPalClient {
   async function failure(response: Response, what: string): Promise<PayPalError> {
     let detail = "";
     let debugId: string | undefined;
+    let issues: PayPalIssue[] = [];
     try {
       const parsed = PayPalErrorBodySchema.safeParse(await response.json());
       if (parsed.success) {
         debugId = parsed.data.debug_id;
         detail = [parsed.data.name, parsed.data.message].filter(Boolean).join(": ").slice(0, 160);
+        // Issue code, field NAME and description only: never the offending value, which could be personal data.
+        issues = (parsed.data.details ?? []).slice(0, 5).map((d) => ({
+          ...(d.issue ? { issue: d.issue.slice(0, 80) } : {}),
+          ...(d.field ? { field: d.field.slice(0, 120) } : {}),
+          ...(d.description ? { description: d.description.slice(0, 160) } : {}),
+        }));
       }
     } catch {
       /* body was not JSON */
     }
-    const suffix = [detail, debugId ? `debug_id ${debugId}` : ""].filter(Boolean).join(" | ");
-    return new PayPalError(`${what} failed with HTTP ${response.status}${suffix ? ` (${suffix})` : ""}`, response.status, debugId);
+    const suffix = [detail, issues.length ? `issues: ${describeIssues(issues)}` : "", debugId ? `debug_id ${debugId}` : ""].filter(Boolean).join(" | ");
+    return new PayPalError(`${what} failed with HTTP ${response.status}${suffix ? ` (${suffix})` : ""}`, response.status, debugId, issues);
   }
 
   async function fetchToken(): Promise<string> {

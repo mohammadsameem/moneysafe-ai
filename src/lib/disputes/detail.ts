@@ -10,8 +10,10 @@ import { shouldSimulateWrite } from "@/lib/paypal";
 import { isAnalysed } from "./analysis-state";
 import { resolveApprovalState, type ApprovalState } from "./approval";
 import { expectedAction } from "./approve";
-import { liveBlockReason, type LiveDisputeInfo } from "./paypal-reason";
-import { getDisputeView, isResolvedStatus, readLiveDispute, type DisputeReadDeps, type DisputeView } from "./read";
+import { listActivity } from "@/lib/activity/queries";
+import { isRealDispute, liveBlockReason, type LiveDisputeInfo } from "./paypal-reason";
+import { describeResolution, isClosedOnPayPal, mapPayPalResolution } from "./paypal-resolution";
+import { applyPayPalResolution, getDisputeView, isResolvedStatus, readLiveDispute, toDisputeView, type DisputeReadDeps, type DisputeView } from "./read";
 import { demoCopyId } from "@/lib/demo/ids";
 import { canSimulateOutcome } from "./simulate";
 import type { DisputeActionType, DisputesRepo } from "./types";
@@ -30,7 +32,9 @@ export type PanelState =
   /** An open shared seed (M3-08): read-only; "Start demo" opens this session's copy, `copyId`. */
   | { mode: "shared_example"; copyId: string }
   /** A real PayPal dispute where PayPal does not allow the recommended action right now (or cannot be read): no write button. */
-  | { mode: "blocked"; action: DisputeActionType; message: string };
+  | { mode: "blocked"; action: DisputeActionType; message: string }
+  /** PayPal closed this real dispute (it was not decided in the app): "Resolved on PayPal", no Approve, Reject or Retry. */
+  | { mode: "resolved_on_paypal"; message: string };
 
 export interface EvidenceSummary {
   count: number;
@@ -48,6 +52,8 @@ export interface DisputeDetail {
   willSimulate: boolean;
   /** What PayPal says about this dispute right now; null unless it is a real PayPal dispute. */
   live: LiveDisputeInfo | null;
+  /** PayPal's error from the latest failed live write (issue codes, fields, debug_id), or null. Never a secret. */
+  lastWriteError: string | null;
   /** REQ-DIS-11: the session's own demo dispute, evidence submitted, not yet resolved (contest path only). */
   canSimulateOutcome: boolean;
   renderedAt: string;
@@ -89,8 +95,17 @@ export interface DetailDeps extends Omit<DisputeReadDeps, "repo"> {
 }
 
 export async function loadDisputeDetail(id: string, sessionId: string, deps: DetailDeps): Promise<DisputeDetail | null> {
-  const found = await getDisputeView(id, sessionId, deps);
+  let found = await getDisputeView(id, sessionId, deps);
   if (!found) return null;
+
+  // A REAL PayPal dispute: read it fresh FIRST. If PayPal has closed it, record that before anything is decided from the
+  // stale local state, so a closed dispute never offers Approve, Reject or Retry.
+  const live = await readLiveDispute({ dispute: found.dispute, order: found.order }, sessionId, deps);
+  const closed = await applyPayPalResolution({ dispute: found.dispute, order: found.order }, live, sessionId, deps);
+  if (closed) {
+    const now0 = (deps.now ?? (() => new Date()))();
+    found = { view: toDisputeView(closed, now0), order: closed.order, dispute: closed.dispute };
+  }
   const { view, order, dispute } = found;
 
   const [artefacts, history] = await Promise.all([deps.repo.getArtefacts(order.id), deps.repo.getActionHistory(view.id)]);
@@ -114,11 +129,22 @@ export async function loadDisputeDetail(id: string, sessionId: string, deps: Det
     dispute.isSeed && !isResolvedStatus(dispute.status)
       ? { mode: "shared_example", copyId: demoCopyId(sessionId, dispute.id) }
       : derivePanelState(view, dispute.analysisComputedAt, state, history.approvals);
-  // A real PayPal dispute: read it fresh, and offer a write only if PayPal allows that action right now.
-  const live = await readLiveDispute({ dispute, order }, sessionId, deps);
+  // Offer a write on a real dispute only if PayPal allows that action right now.
   if (live && (panel.mode === "decide" || panel.mode === "retry")) {
     const reason = liveBlockReason(live, panel.action);
     if (reason) panel = { mode: "blocked", action: panel.action, message: reason };
+  }
+  // Closed on PayPal (resolved there, not decided here): say so, with no buttons.
+  const closedOnPayPal = isRealDispute(dispute) && isResolvedStatus(dispute.status) && history.executions.every((e) => e.executedAt === null) && live?.readFailed === null && isClosedOnPayPal({ status: live.status, disputeState: live.state, outcomeCode: live.outcomeCode });
+  if (closedOnPayPal) {
+    panel = { mode: "resolved_on_paypal", message: describeResolution(mapPayPalResolution({ status: live.status, disputeState: live.state, outcomeCode: live.outcomeCode }), live.outcomeReason) };
+  }
+  // A failed live write: show PayPal's error (issue codes, field names, debug id), read back from the activity log so it survives a reload.
+  let lastWriteError: string | null = null;
+  if (panel.mode === "retry" || panel.mode === "blocked") {
+    const failedWrites = await listActivity(sessionId, { refDisputeId: dispute.id, stepType: "paypal_api", status: "error", pageSize: 1 }).catch(() => null);
+    const row = failedWrites?.entries.find((e) => e.toolName === "accept_claim" || e.toolName === "submit_evidence");
+    lastWriteError = row ? row.outputSummary : null;
   }
 
   return {
@@ -128,6 +154,7 @@ export async function loadDisputeDetail(id: string, sessionId: string, deps: Det
     panel,
     history,
     live,
+    lastWriteError,
     willSimulate: shouldSimulateWrite(dispute, deps.demoMode),
     canSimulateOutcome: canSimulateOutcome(
       dispute,

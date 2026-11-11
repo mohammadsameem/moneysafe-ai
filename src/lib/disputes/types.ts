@@ -52,6 +52,16 @@ export interface DisputesAnalysisRepo extends DisputesReadRepo {
   releaseAnalysisClaim(id: string, token: string): Promise<void>;
 }
 
+/** Recording that PayPal closed a REAL dispute. One guarded update; creates no approval, execution or outcome row. */
+export interface DisputeResolutionRepo {
+  /**
+   * Mark the dispute resolved with PayPal's outcome, but only while it is still unresolved, not a seed and not a demo
+   * dispute. Returns the updated row, or null if nothing changed (already resolved, or not a real dispute).
+   * `reasoning` is appended to the stored reasoning so the page can explain what happened.
+   */
+  markResolvedOnPayPal(input: { id: string; status: Dispute["status"]; outcome: Dispute["outcome"]; note: string }): Promise<Dispute | null>;
+}
+
 // ---------------------------------------------------------------------------
 // Approvals and executions (M2-04, M2-05)
 // ---------------------------------------------------------------------------

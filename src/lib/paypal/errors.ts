@@ -10,10 +10,25 @@ export class PayPalError extends Error {
     readonly status?: number,
     /** PayPal's `debug_id` from the error body, handy when talking to PayPal support. */
     readonly debugId?: string,
+    /** PayPal's per-problem detail (issue code, field name, description), already trimmed. No values, tokens or payloads. */
+    readonly issues: PayPalIssue[] = [],
   ) {
     super(message);
     this.name = "PayPalError";
   }
+}
+
+export interface PayPalIssue {
+  issue?: string;
+  field?: string;
+  description?: string;
+}
+
+/** "ISSUE (field: description)" for each problem, compact enough for a one-line summary. */
+export function describeIssues(issues: readonly PayPalIssue[]): string {
+  return issues
+    .map((i) => `${i.issue ?? "ISSUE"}${i.field || i.description ? ` (${[i.field && `field ${i.field}`, i.description].filter(Boolean).join(": ")})` : ""}`)
+    .join("; ");
 }
 
 /**

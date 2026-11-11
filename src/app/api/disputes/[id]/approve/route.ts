@@ -51,7 +51,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     case "execution_failed":
       // 502: the dispute service is fine; PayPal was not. The merchant can press Approve again to retry.
       return NextResponse.json(
-        { status: "execution_failed", retryable: true, message: result.message, execution: result.execution, dispute: result.view },
+        { status: "execution_failed", retryable: true, message: result.message, error: result.error ?? null, execution: result.execution, dispute: result.view },
         { status: 502 },
       );
     case "not_found":

@@ -1,5 +1,14 @@
 # MoneySafe AI: Devpost draft
 
+## Try it in 60 seconds
+
+1. Open the live demo and **sign in** as `demo@moneysafe.ai` (the password is shown on the login page).
+2. On the Dashboard click **Start demo**. You get your own copies of three example disputes.
+3. Open **Disputes** and open the **$145** dispute ("Your copy of SEED-C", Item not received, 95% win likelihood).
+4. Click **Approve**. The PayPal call is simulated and badged "Simulated"; nothing is sent to PayPal.
+5. Choose **Simulate outcome**, then **Won**.
+6. Watch the **Dashboard** (Dollars protected, outcome chart) and **Insights** update.
+
 _Draft for the submission form. Replace the bracketed placeholders; keep the "What is real" section, it is the part judges can check._
 
 **Tagline:** The risk desk for micro-merchants.
@@ -9,7 +18,7 @@ _Draft for the submission form. Replace the bracketed placeholders; keep the "Wh
 
 ## Inspiration
 
-A chargeback costs a small seller the sale, the goods and a fee of around $20 on top, and most micro-merchants have no risk team. They either ship everything and absorb the losses, or they refuse good customers. When a dispute does arrive there is a deadline, a form and no way to know whether contesting is worth the effort. We wanted one screen that says, in plain language, "this order looks risky, and here is exactly why" and later "contest this dispute, or just refund it".
+A chargeback costs a small seller the sale, the goods and a fee (we model it as $20) on top, and most micro-merchants have no risk team. They either ship everything and absorb the losses, or they refuse good customers. When a dispute does arrive there is a deadline, a form and no way to know whether contesting is worth the effort. We wanted one screen that says, in plain language, "this order looks risky, and here is exactly why" and later "contest this dispute, or just refund it".
 
 ## What it does
 
@@ -20,20 +29,24 @@ The pages: a **Dashboard** (value under review, disputes won, dollars protected,
 ## How it works
 
 - **Score.** A pure rule engine adds up weighted signals into a 0 to 100 score and a verdict (Ship, Verify first, Hold). There is one implementation, and the model cannot change a score.
-- **Expected value.** Contest only if `p × amount − (1 − p) × fee − effort > 0`, with the fee and the effort cost as settings. `p` starts from a rubric over evidence completeness, clamped to 5%..95%. The model may adjust it by at most ±0.1.
+- **Expected value.** Contest only if `p × amount − (1 − p) × fee − effort > 0`, with the chargeback fee (we model it as $20) and the effort cost as settings. `p` starts from a rubric over evidence completeness, clamped to 5%..95%. The model may adjust it by at most ±0.1.
 - **Tool use, not free text.** The model answers through a pinned tool call and its output is validated with zod. If it is unavailable, over budget or returns something invalid, the app shows the rule-based result and says "AI unavailable". It has no write tools of any kind.
-- **Approval invariant.** Every PayPal write goes through one gate that needs an approval record. A partial unique index makes a double approval impossible, and a failed call is retried with the same `PayPal-Request-Id`, so a retry cannot act twice.
+- **Approval invariant.** Every PayPal write goes through one gate that needs an approval record. A partial unique index prevents a second approval of the same action, and a failed call is retried with the same `PayPal-Request-Id`, so a retry does not act twice.
 - **Learning loop.** After enough recorded outcomes the app proposes new weights, with reasoning, and waits for the merchant.
 
 ## What is real, and what is simulated
 
 We want to be exact about this, because the demo runs on PayPal's sandbox.
 
-- **Real:** the PayPal sandbox order flow (create, buyer approval, capture) and add-tracking; the risk scoring; the evidence, win-probability and expected-value logic; the model calls (Groq, with an optional Gemini fallback); the approval gate and idempotency; the budget guard.
+- **Real:** the PayPal sandbox order flow (create, buyer approval, capture) and add-tracking; the risk scoring; the evidence, win-probability and expected-value logic; the model calls (Groq); the approval gate and idempotency; the budget guard.
 - **Real disputes:** a sandbox buyer can open a dispute in the Resolution Center. The app reads it through the PayPal Disputes API, matches it to a real captured order in the owner's session only (no other visitor can see or act on it), and shows PayPal's own status, stage, due date and allowed actions. At the inquiry stage PayPal allows a refund or an offer, not evidence, so the app offers the refund and no evidence button. Approval goes through the same approval gate to a live PayPal call, never simulated, with the same `PayPal-Request-Id` on retry. We ran this on a real $230 sandbox dispute: it was linked to the right order, analysed by the live model (5% win likelihood, refund recommended, because that order had not been shipped and so had no evidence), and PayPal's real status and allowed actions were shown.
 - **Simulated:** **Start demo** and the seeded disputes are example data, not PayPal disputes. Approving one simulates the PayPal call and carries a "Simulated" badge, and Won / Lost outcomes are simulated with a control and labelled everywhere. Carrier scan events are mocked; there is no tracking provider. The history the learning loop starts from is seeded.
-- **Tested against the real sandbox:** reading and matching a real dispute, its live status and allowed actions, and the failure and retry path of a live dispute write (PayPal answers 404, the app reports it, offers Retry, and reuses the same request id).
-- **Not yet run:** a successful live refund or evidence submission on a real dispute. That path has only been tested with a mocked PayPal.
+- **Closed on PayPal:** if PayPal reports a real dispute as closed, the next page view or sync marks it resolved locally, stores PayPal's outcome (for example `RESOLVED_BUYER_FAVOUR` is recorded as refunded), shows "Resolved on PayPal" and hides Approve and Reject. It creates no approval, no execution and no learning-loop outcome. This happened on our real $230 dispute: the buyer's claim had already been settled with a refund made outside the app, and the app picked that up.
+- **When a live write fails:** PayPal's error (issue codes, field names, `debug_id`; never a secret or a field value) is stored in the activity row and shown on the page, with Retry on the same request id.
+- **Text only:** the draft response says "The evidence on file includes ..."; the app never claims an attachment because it sends no files.
+- **Models:** one provider, Groq. The code can call a second provider if a key is configured, but it is off by default and we have not run it against a live second provider, so we do not claim one.
+- **Tested against the real sandbox:** reading and matching a real dispute, its live status and allowed actions, a live write that PayPal rejected (HTTP 422, because the dispute was already settled) and the closure described above. The error-detail display is covered by tests with a mocked PayPal; the real 422 we stored had no `details` in it.
+- **Not yet run:** a successful live refund or evidence submission on a real dispute. That path has only been tested with a mocked PayPal. PayPal's accept-claim reference lists only `note` as required; we send `note` and `accept_claim_type: REFUND`, and that exact call has not yet succeeded live.
 
 ## Challenges
 
@@ -45,7 +58,7 @@ We want to be exact about this, because the demo runs on PayPal's sandbox.
 
 ## Accomplishments
 
-- 882 automated tests plus a headless-browser suite that drives the real UI at phone, tablet and desktop widths, including the full demo script after a global reset.
+- Over 880 automated tests plus a headless-browser suite that drives the real UI at phone, tablet and desktop widths, including the full demo script after a global reset.
 - A seed that verifies itself (`db:seed:verify`), so the demo state is the same every time.
 - Model output is never trusted: schemas on the way in, clamps on the numbers, a rule-based answer behind every AI answer.
 - Idempotent actions by construction (a unique index and a stored request id), not by hoping nobody double-clicks.
@@ -60,4 +73,4 @@ We want to be exact about this, because the demo runs on PayPal's sandbox.
 
 ## Built with
 
-Next.js 14 · React 18 · TypeScript · Tailwind CSS · Drizzle ORM · PostgreSQL on Supabase · NextAuth · zod · Vitest · PayPal REST API (sandbox) · Groq and Gemini (OpenAI-compatible APIs) · Vercel
+Next.js 14 · React 18 · TypeScript · Tailwind CSS · Drizzle ORM · PostgreSQL on Supabase · NextAuth · zod · Vitest · PayPal REST API (sandbox) · Groq (OpenAI-compatible API) · Vercel

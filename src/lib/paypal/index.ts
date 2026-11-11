@@ -3,7 +3,8 @@ import { getPayPalCredentials } from "../env";
 import { createPayPalClient, type PayPalClient } from "./client";
 
 export { createPayPalClient, PAYPAL_SANDBOX_BASE_URL, type PayPalClient } from "./client";
-export { ApprovalRequiredError, PayPalError } from "./errors";
+export { ApprovalRequiredError, PayPalError, describeIssues } from "./errors";
+export type { PayPalIssue } from "./errors";
 export { addTracking, captureOrder, createOrder, getOrder, toMoney } from "./orders";
 export type { AddTrackingInput, CapturedOrder, CreateOrderInput, CreatedOrder, PayPalOrder } from "./orders";
 export { isDemoMode, shouldSimulateWrite, withDemoFallback } from "./demo";

@@ -25,13 +25,15 @@ interface Props {
   willSimulate: boolean;
   /** Show "Simulate outcome (Won / Lost)" (REQ-DIS-11; the server re-checks). */
   canSimulateOutcome?: boolean;
+  /** PayPal's error from the latest failed live write (issue codes, fields, debug_id), kept across reloads. */
+  lastWriteError?: string | null;
 }
 
 /**
  * Approve / Edit + Approve / Reject (REQ-DIS-05). The merchant's click is the only thing that can
  * start a PayPal action; the server re-checks everything (approval gate, idempotency).
  */
-export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate, canSimulateOutcome = false }: Props) {
+export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate, canSimulateOutcome = false, lastWriteError = null }: Props) {
   const router = useRouter();
   const { toast } = useToast();
   const draft = panel.mode === "decide" ? panel.draft ?? "" : "";
@@ -144,10 +146,19 @@ export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate, canSi
 
       {panel.mode === "resolved" ? <p className="text-sm text-muted-foreground">This dispute is resolved. There is nothing left to approve.</p> : null}
 
+      {panel.mode === "resolved_on_paypal" ? (
+        <div role="status" className="space-y-1 rounded-md border border-sky-300 bg-sky-50 px-3 py-3 text-sm text-sky-950">
+          <p className="font-medium">Resolved on PayPal</p>
+          <p>{panel.message}</p>
+          <p className="text-xs">It was closed on PayPal, not decided here, so there is nothing to approve or reject. The app did not send anything, and the weight-learning loop is not affected.</p>
+        </div>
+      ) : null}
+
       {panel.mode === "blocked" ? (
         <div role="note" className="space-y-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-950">
           <p className="font-medium">Nothing can be sent to PayPal right now</p>
           <p>{panel.message}</p>
+          {lastWriteError ? <p className="break-words font-mono text-xs" data-testid="last-write-error">Last attempt, PayPal said: {lastWriteError}</p> : null}
         </div>
       ) : null}
 
@@ -194,6 +205,7 @@ export function ApprovalPanel({ disputeId, panel, amountUsd, willSimulate, canSi
         <div className="space-y-3">
           <div role="alert" className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
             You approved this, but the last attempt to send it to PayPal did not go through. Retrying is safe: it reuses the same request, so PayPal cannot apply it twice.
+            {lastWriteError ? <p className="mt-2 break-words font-mono text-xs" data-testid="last-write-error">PayPal said: {lastWriteError}</p> : null}
           </div>
           <button type="button" className={primary} disabled={busy} onClick={() => void send("approve", panel.action)}>
             {busy ? "Retrying…" : "Retry"}

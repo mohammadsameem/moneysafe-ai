@@ -21,6 +21,8 @@ Replace `[YOUR-PASSWORD]` with your database password. If it contains special ch
 
 `DATABASE_URL` is what the deployed app uses. `DIRECT_URL` is used only by `drizzle-kit` migrations from your machine, so Vercel does not strictly need it, but add it anyway so the two environments match.
 
+**Security: connect as the table owner only. Never use the Supabase client or the anon key.** The migration `0001_enable_rls.sql` turns on Row Level Security (with no policies) on all 12 app tables and revokes every privilege from Supabase's `anon` and `authenticated` roles, so Supabase's public REST API can read and write nothing here. The app is unaffected because the pooler strings above log in as the table owner, which bypasses RLS. Two consequences: do not add `@supabase/supabase-js` or an anon key to this app (it would see no rows), and keep the project's `anon` key out of the client. Run `npm run db:migrate` once to apply it; it is safe to run again.
+
 ## 2. Create the Vercel project
 
 1. vercel.com, **Add New... > Project**, import the GitHub repo.
@@ -45,9 +47,9 @@ Add each to **Production** (and **Preview** if you want preview deployments to w
 | `CHARGEBACK_FEE_USD` | no | Default 20 |
 | `CONTEST_EFFORT_USD` | no | Default 10 |
 | `LLM_API_KEY` | no | Primary provider key. Empty means no model is ever called and every AI feature uses its rule-based result |
-| `LLM_BASE_URL`, `LLM_MODEL` | no | Recommended: Groq, `https://api.groq.com/openai/v1` and `openai/gpt-oss-120b` (the code defaults are Gemini's, so set these) |
-| `LLM_FALLBACK_API_KEY` | no | Second provider, tried once if the first fails. Ignored if `LLM_API_KEY` is empty |
-| `LLM_FALLBACK_BASE_URL`, `LLM_FALLBACK_MODEL` | no | Recommended: Gemini, `https://generativelanguage.googleapis.com/v1beta/openai/` and `gemini-3.8-flash` (the code defaults are Groq's, so set these) |
+| `LLM_BASE_URL`, `LLM_MODEL` | no | Recommended: Groq, `https://api.groq.com/openai/v1` and `openai/gpt-oss-120b` (the built-in defaults are a different provider, so set both) |
+| `LLM_FALLBACK_API_KEY` | no | Leave unset. The fallback is off unless this key is set; we have not verified a live second provider. If it is set on Vercel from an earlier setup, delete it. Ignored if `LLM_API_KEY` is empty |
+| `LLM_FALLBACK_BASE_URL`, `LLM_FALLBACK_MODEL` | no | Only if you enable a fallback: the OpenAI-compatible base URL and model of that second provider |
 | `LLM_DAILY_CAP` | no | Calls per UTC day across everyone. Default 200 |
 
 ### The `NEXTAUTH_URL` chicken-and-egg

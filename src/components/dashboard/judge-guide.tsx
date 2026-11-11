@@ -16,7 +16,7 @@ export function JudgeGuide() {
           <strong>Start demo</strong> (the button below): you get your own copies of the three open example disputes, ready to use.
         </li>
         <li>
-          Open your SEED-C copy in <Link href="/disputes" className={link}>Disputes</Link> and approve it. The action is simulated; nothing is sent to PayPal.
+          Open your SEED-C copy (Item not received, $145) in <Link href="/disputes" className={link}>Disputes</Link> and approve it. The action is simulated; nothing is sent to PayPal.
         </li>
         <li>
           On that dispute choose <strong>Simulate outcome</strong>, then Won. It is recorded as a simulated outcome.

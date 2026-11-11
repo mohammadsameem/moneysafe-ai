@@ -41,6 +41,8 @@ export const DISPUTE_STATUSES = [
   "resolved_won",
   "resolved_lost",
   "resolved_refunded",
+  // A real PayPal dispute that PayPal closed without a refund or a win we can name (cancelled, denied, withdrawn).
+  "resolved_closed",
 ] as const;
 export const DISPUTE_OUTCOMES = ["won", "lost", "refunded"] as const;
 export const WIN_LIKELIHOOD_LABELS = ["Strong", "Moderate", "Weak"] as const;

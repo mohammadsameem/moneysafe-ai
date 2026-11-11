@@ -148,7 +148,7 @@ export function ruleBasedDraftResponse(i: RuleBasedDraftInput): string {
     } else if (i.lastScan) {
       lines.push(`The carrier's latest scan is "${i.lastScan.status}" on ${i.lastScan.date}, so the parcel has not been reported lost or returned.`);
     }
-    lines.push("", "I have attached the invoice, line items, delivery address and tracking details, and I ask that the claim be decided in my favour.");
+    lines.push("", "The evidence on file includes the invoice, line items, delivery address and tracking details. I ask that the claim be decided in my favour.");
   } else {
     lines.push(`I am responding to the not-as-described claim on this order (${item}, ${usd(i.amountUsd)}).`);
     lines.push("I believe the item matches its listing. The invoice and line items on file show exactly what was ordered and sent.");

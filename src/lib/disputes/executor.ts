@@ -14,6 +14,7 @@ import type { ActionExecution, ApprovalRecord, Dispute, Order } from "@/db/schem
 import type { ActivityMeta } from "@/lib/activity/logger";
 import {
   PayPalError,
+  type PayPalIssue,
   acceptClaim,
   shouldSimulateWrite,
   submitEvidence,
@@ -64,7 +65,14 @@ export type ExecuteResult =
   | { kind: "executed"; execution: ActionExecution; simulated: boolean; outcomeRecorded: boolean }
   | { kind: "already_executed"; execution: ActionExecution }
   /** The live call failed or could not be made. Nothing was marked done; retry with the same request id. */
-  | { kind: "failed"; message: string; execution: ActionExecution };
+  | { kind: "failed"; message: string; execution: ActionExecution; error?: LiveWriteError };
+
+/** What PayPal said when a live write failed: enough to act on, nothing secret. */
+export interface LiveWriteError {
+  httpStatus: number | null;
+  issues: PayPalIssue[];
+  debugId: string | null;
+}
 
 /** The numbers a refund outcome records about the order at the time. */
 export function refundSnapshot(dispute: Dispute, order: Order, activeWeightsId: string | null): RefundOutcomeInput {
@@ -101,9 +109,9 @@ export async function executeApproved(ctx: ExecuteContext, deps: ExecutorDeps): 
       /* logging is best effort */
     }
   };
-  const failed = async (message: string): Promise<ExecuteResult> => {
+  const failed = async (message: string, error?: LiveWriteError): Promise<ExecuteResult> => {
     await log("error", message);
-    return { kind: "failed", message, execution };
+    return { kind: "failed", message, execution, ...(error ? { error } : {}) };
   };
 
   // The one function that reaches PayPal (or simulates it). It is only ever called by the gate.
@@ -129,7 +137,7 @@ export async function executeApproved(ctx: ExecuteContext, deps: ExecutorDeps): 
   } catch (err) {
     // A PayPal failure is expected and retryable. Anything else (including a blocked, unapproved
     // write) is a bug or an attack and must not be disguised as a retryable error.
-    if (err instanceof PayPalError) return await failed(err.message);
+    if (err instanceof PayPalError) return await failed(err.message, { httpStatus: err.status ?? null, issues: err.issues, debugId: err.debugId ?? null });
     throw err;
   }
 

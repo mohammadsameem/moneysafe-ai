@@ -15,7 +15,7 @@ import type { ActivityMeta } from "@/lib/activity/logger";
 import { ACCEPT_CLAIM_NOTE, EVIDENCE_NOTES_MAX_CHARS, buildProvideEvidencePayload } from "@/lib/paypal/evidence-payload";
 import { isAnalysed } from "./analysis-state";
 import { createApprovalWithExecution, resolveApprovalState, type ApprovalState } from "./approval";
-import { executeApproved, type ExecutorDeps } from "./executor";
+import { executeApproved, type ExecutorDeps, type LiveWriteError } from "./executor";
 import { isRealDispute } from "./paypal-reason";
 import { toDisputeView, type DisputeView } from "./read";
 import { ApprovalConflictError, type DisputeActionType, type DisputesRepo } from "./types";
@@ -55,7 +55,7 @@ export type ApproveResult =
   | { kind: "executed"; simulated: boolean; retried: boolean; outcomeRecorded: boolean; execution: PublicExecution; view: DisputeView }
   | { kind: "already_executed"; execution: PublicExecution; view: DisputeView }
   /** The live call failed. Nothing was marked done; the next approve is a retry with the same request id. */
-  | { kind: "execution_failed"; message: string; execution: PublicExecution; view: DisputeView }
+  | { kind: "execution_failed"; message: string; execution: PublicExecution; view: DisputeView; error?: LiveWriteError }
   | { kind: "not_found" }
   /** A shared seed: read-only for everyone; use Start demo for an own copy. */
   | { kind: "shared_example" }
@@ -178,7 +178,7 @@ export async function approveDispute(req: ApproveRequest, deps: ApproveDeps): Pr
     case "already_executed":
       return { kind: "already_executed", execution: publicExecution(result.execution), view: await reread() };
     case "failed":
-      return { kind: "execution_failed", message: result.message, execution: publicExecution(result.execution), view: await reread() };
+      return { kind: "execution_failed", message: result.message, execution: publicExecution(result.execution), view: await reread(), ...(result.error ? { error: result.error } : {}) };
   }
 }
 

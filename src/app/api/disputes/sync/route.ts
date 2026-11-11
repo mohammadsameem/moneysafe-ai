@@ -21,6 +21,7 @@ export async function POST(): Promise<NextResponse> {
     status: "ok",
     checked: result.checked,
     linked: result.linked.map((l) => ({ disputeId: l.disputeId, created: l.created })),
+    closedOnPayPal: result.closedOnPayPal,
     skipped: result.skipped,
   });
 }

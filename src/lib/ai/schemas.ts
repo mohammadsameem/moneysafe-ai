@@ -87,13 +87,21 @@ export const DRAFT_RESPONSE_MAX_CHARS = 2400;
 /** REQ-DIS-04: the draft response is at most 400 words. */
 export const DRAFT_RESPONSE_MAX_WORDS = 400;
 
+/**
+ * The response is plain text: the app cannot attach files to it, so a draft must never say it does. Matches the usual ways
+ * of claiming one ("I have attached", "attached are", "see attached", "enclosed", "please find ... attached"). A draft that
+ * fails this check is replaced by the factual template, like any other invalid model output.
+ */
+export const ATTACHMENT_CLAIM = /\battach(?:ed|ing|ment|ments)?\b|\benclos(?:ed|ing|ure|ures)\b/i;
+
 export const DraftResponseSchema = z.object({
   response_text: z
     .string()
     .trim()
     .min(1, "must not be empty")
     .max(DRAFT_RESPONSE_MAX_CHARS)
-    .refine((text) => countWords(text) <= DRAFT_RESPONSE_MAX_WORDS, `must be at most ${DRAFT_RESPONSE_MAX_WORDS} words`),
+    .refine((text) => countWords(text) <= DRAFT_RESPONSE_MAX_WORDS, `must be at most ${DRAFT_RESPONSE_MAX_WORDS} words`)
+    .refine((text) => !ATTACHMENT_CLAIM.test(text), "must not claim an attachment (the response is text only)"),
 });
 export type DraftResponse = z.infer<typeof DraftResponseSchema>;
 

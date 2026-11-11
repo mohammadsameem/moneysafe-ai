@@ -154,6 +154,53 @@ describe("errors never leak credentials", () => {
     for (const secret of [CLIENT_ID, CLIENT_SECRET, "SECRET-TOKEN-VALUE", "payload"]) expect(everything).not.toContain(secret);
   });
 
+  it("keeps PayPal's issue codes, field names and descriptions (and debug_id), but never the offending VALUE", async () => {
+    const { fetchMock, client } = setup();
+    fetchMock.mockResolvedValueOnce(token("SECRET-TOKEN-VALUE")).mockResolvedValueOnce(
+      json(
+        {
+          name: "UNPROCESSABLE_ENTITY",
+          message: "The requested action could not be performed.",
+          debug_id: "dbg-77",
+          details: [
+            { field: "/accept_claim_reason", value: "buyer.private@example.com", issue: "MISSING_REQUIRED_PARAMETER", description: "A required field is missing." },
+            { issue: "DISPUTE_ALREADY_RESOLVED", description: "The dispute is already resolved." },
+          ],
+        },
+        422,
+      ),
+    );
+
+    const err = await client.request("/v1/customer/disputes/PP-1/accept-claim", { method: "POST", body: { note: "n" } }, Shape).catch((e) => e);
+
+    expect(err).toBeInstanceOf(PayPalError);
+    expect(err.issues).toEqual([
+      { issue: "MISSING_REQUIRED_PARAMETER", field: "/accept_claim_reason", description: "A required field is missing." },
+      { issue: "DISPUTE_ALREADY_RESOLVED", description: "The dispute is already resolved." },
+    ]);
+    expect(err.debugId).toBe("dbg-77");
+    for (const part of ["MISSING_REQUIRED_PARAMETER", "/accept_claim_reason", "DISPUTE_ALREADY_RESOLVED", "debug_id dbg-77"]) expect(err.message).toContain(part);
+    expect(`${err.message} ${JSON.stringify(err)}`).not.toContain("buyer.private@example.com");
+    expect(`${err.message} ${JSON.stringify(err)}`).not.toContain("SECRET-TOKEN-VALUE");
+  });
+
+  it("bounds what it keeps: at most 5 issues, each field trimmed", async () => {
+    const { fetchMock, client } = setup();
+    const many = Array.from({ length: 9 }, (_, i) => ({ issue: `ISSUE_${i}`, field: "f".repeat(400) }));
+    fetchMock.mockResolvedValueOnce(token("T")).mockResolvedValueOnce(json({ name: "X", details: many }, 400));
+    const err = await client.request("/a", { method: "POST", body: {} }, Shape).catch((e) => e);
+    expect(err.issues).toHaveLength(5);
+    expect(err.issues[0].field).toHaveLength(120);
+  });
+
+  it("an error body with no details still works (issues is empty)", async () => {
+    const { fetchMock, client } = setup();
+    fetchMock.mockResolvedValueOnce(token("T")).mockResolvedValueOnce(json({ name: "NOT_FOUND", debug_id: "d1" }, 404));
+    const err = await client.request("/a", { method: "GET" }, Shape).catch((e) => e);
+    expect(err.issues).toEqual([]);
+    expect(err.message).toContain("HTTP 404");
+  });
+
   it("a failed authentication is reported without the client secret", async () => {
     const { fetchMock, client } = setup();
     fetchMock.mockResolvedValueOnce(json({ name: "invalid_client", message: "Client Authentication failed" }, 401));

@@ -17,6 +17,7 @@ import {
 import { isUuid } from "@/lib/orders/queries";
 import { CLAIM_PREFIX, CLAIM_TIME_LENGTH, CLAIM_TIME_START } from "./analysis-state";
 import type { IngestRepo } from "./ingest";
+import type { DisputeResolutionRepo } from "./types";
 import type { SimulationRepo } from "./simulate";
 import {
   ApprovalConflictError,
@@ -217,6 +218,32 @@ export function createDrizzleDisputesRepo(db: Db = getDb()): DisputesRepo {
         if (recorded) counterAfter = await bumpResolvedCounter(tx);
         return { applied: true, execution, outcomeRecorded: recorded, counterAfter };
       });
+    },
+  };
+}
+
+/** Record that PayPal closed a real dispute (see paypal-resolution.ts). One guarded UPDATE; nothing else is written. */
+export function createDrizzleResolutionRepo(db: Db = getDb()): DisputeResolutionRepo {
+  return {
+    async markResolvedOnPayPal({ id, status, outcome, note }) {
+      const rows = await db
+        .update(disputes)
+        .set({
+          status,
+          outcome,
+          outcomeIsSimulated: false,
+          reasoning: sql`CASE WHEN ${disputes.reasoning} IS NULL OR ${disputes.reasoning} = '' THEN ${note} ELSE ${disputes.reasoning} || ' ' || ${note} END`,
+        })
+        .where(
+          and(
+            eq(disputes.id, id),
+            eq(disputes.isSeed, false),
+            eq(disputes.isDemo, false),
+            inArray(disputes.status, ["open", "action_taken"]),
+          ),
+        )
+        .returning();
+      return rows[0] ?? null;
     },
   };
 }

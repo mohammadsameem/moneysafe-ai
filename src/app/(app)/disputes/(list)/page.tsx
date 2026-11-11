@@ -11,6 +11,7 @@ import { formatDate, shortId } from "@/lib/format";
 import { listDisputeViews, type DisputeTab, type DisputeView } from "@/lib/disputes/read";
 import { OUTCOME_LABEL, OUTCOME_TONE, REASON_LABEL, STATUS_LABEL, STATUS_TONE, money } from "@/lib/disputes/present";
 import { buildReadDeps } from "@/lib/disputes/runtime";
+import { seedDisputeLabels } from "@/lib/disputes/seed-labels";
 import { getSessionId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +26,7 @@ export default async function DisputesPage({ searchParams }: { searchParams: { t
   const tab: DisputeTab = searchParams.tab === "resolved" ? "resolved" : "open";
   const sessionId = await getSessionId();
   const disputes = sessionId ? await listDisputeViews(sessionId, tab, buildReadDeps()) : [];
+  const labels = sessionId ? seedDisputeLabels(disputes.map((d) => d.id), sessionId) : {};
   const renderedAt = new Date().toISOString();
   // The button only exists where it can work: live mode with PayPal credentials.
   const canCheckPayPal = !isDemoModeEnabled() && getPayPalClient() !== null;
@@ -70,9 +72,9 @@ export default async function DisputesPage({ searchParams }: { searchParams: { t
       {disputes.length === 0 ? (
         <EmptyState tab={tab} />
       ) : tab === "open" ? (
-        <OpenTable disputes={disputes} renderedAt={renderedAt} />
+        <OpenTable disputes={disputes} renderedAt={renderedAt} labels={labels} />
       ) : (
-        <ResolvedTable disputes={disputes} />
+        <ResolvedTable disputes={disputes} labels={labels} />
       )}
     </div>
   );
@@ -89,10 +91,15 @@ function EmptyState({ tab }: { tab: DisputeTab }) {
   );
 }
 
+/** The seed name of a demo dispute ("SEED-C", "Your copy of SEED-C"), so the Judge guide and the table agree. */
+function SeedLabel({ label }: { label: string }) {
+  return <ToneBadge tone="neutral">{label}</ToneBadge>;
+}
+
 const th = "px-4 py-2 font-medium";
 const td = "px-4 py-3 align-middle";
 
-function OpenTable({ disputes, renderedAt }: { disputes: DisputeView[]; renderedAt: string }) {
+function OpenTable({ disputes, renderedAt, labels }: { disputes: DisputeView[]; renderedAt: string; labels: Record<string, string> }) {
   return (
     <div className="overflow-x-auto rounded-lg border">
       <table className="w-full text-sm">
@@ -114,6 +121,7 @@ function OpenTable({ disputes, renderedAt }: { disputes: DisputeView[]; rendered
                   {REASON_LABEL[d.reason]}
                 </Link>
                 <div className="mt-1 flex flex-wrap gap-1.5">
+                  {labels[d.id] ? <SeedLabel label={labels[d.id]} /> : null}
                   {d.isDemo ? <DemoBadge /> : null}
                   {d.isSharedExample ? <ToneBadge tone="neutral">Shared example</ToneBadge> : null}
                 </div>
@@ -136,7 +144,7 @@ function OpenTable({ disputes, renderedAt }: { disputes: DisputeView[]; rendered
   );
 }
 
-function ResolvedTable({ disputes }: { disputes: DisputeView[] }) {
+function ResolvedTable({ disputes, labels }: { disputes: DisputeView[]; labels: Record<string, string> }) {
   return (
     <div className="overflow-x-auto rounded-lg border">
       <table className="w-full text-sm">
@@ -157,7 +165,10 @@ function ResolvedTable({ disputes }: { disputes: DisputeView[] }) {
                 <Link href={`/disputes/${d.id}`} className="font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   {REASON_LABEL[d.reason]}
                 </Link>
-                <div className="mt-1 flex flex-wrap gap-1.5">{d.isDemo ? <DemoBadge /> : null}</div>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {labels[d.id] ? <SeedLabel label={labels[d.id]} /> : null}
+                  {d.isDemo ? <DemoBadge /> : null}
+                </div>
               </td>
               <td className={`${td} text-right tabular-nums`}>{money(d.amountUsd)}</td>
               <td className={td}>

@@ -19,6 +19,7 @@ import { loadDisputeDetail } from "@/lib/disputes/detail";
 import { OUTCOME_LABEL, OUTCOME_TONE, REASON_LABEL, STATUS_LABEL, STATUS_TONE, money } from "@/lib/disputes/present";
 import { isResolvedStatus } from "@/lib/disputes/read";
 import { buildDetailDeps } from "@/lib/disputes/runtime";
+import { seedDisputeLabel } from "@/lib/disputes/seed-labels";
 import { buildTimeline } from "@/lib/disputes/timeline";
 import { getSessionId } from "@/lib/session";
 
@@ -33,6 +34,7 @@ export default async function DisputeDetailPage({ params }: { params: { id: stri
   const timeline = buildTimeline(detail);
   const analysis = view.analysis;
   const resolved = isResolvedStatus(view.status);
+  const seedLabel = seedDisputeLabel(view.id, sessionId!);
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -56,7 +58,9 @@ export default async function DisputeDetailPage({ params }: { params: { id: stri
               <ToneBadge tone={STATUS_TONE[view.status]}>{STATUS_LABEL[view.status]}</ToneBadge>
             </>
           )}
+          {seedLabel ? <ToneBadge tone="neutral">{seedLabel}</ToneBadge> : null}
           {view.isDemo ? <DemoBadge /> : null}
+          {panel.mode === "resolved_on_paypal" ? <ToneBadge tone="info">Resolved on PayPal</ToneBadge> : null}
           <Link href={`/orders/${view.orderId}`} className="text-sm underline-offset-2 hover:underline">
             Order <span className="font-mono">{shortId(view.orderId)}</span>
           </Link>
@@ -93,7 +97,7 @@ export default async function DisputeDetailPage({ params }: { params: { id: stri
           </div>
           <div className="lg:col-span-3">
             <SectionBoundary what="decision panel">
-              <ApprovalPanel disputeId={view.id} panel={panel} amountUsd={view.amountUsd} willSimulate={willSimulate} canSimulateOutcome={detail.canSimulateOutcome} />
+              <ApprovalPanel disputeId={view.id} panel={panel} amountUsd={view.amountUsd} willSimulate={willSimulate} canSimulateOutcome={detail.canSimulateOutcome} lastWriteError={detail.lastWriteError} />
             </SectionBoundary>
           </div>
           <div className="lg:col-span-2">

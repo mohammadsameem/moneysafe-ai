@@ -31,6 +31,7 @@ export const STATUS_LABEL: Record<Dispute["status"], string> = {
   resolved_won: "Resolved: won",
   resolved_lost: "Resolved: lost",
   resolved_refunded: "Resolved: refunded",
+  resolved_closed: "Resolved on PayPal",
 };
 
 export const STATUS_TONE: Record<Dispute["status"], Tone> = {
@@ -39,6 +40,7 @@ export const STATUS_TONE: Record<Dispute["status"], Tone> = {
   resolved_won: "good",
   resolved_lost: "bad",
   resolved_refunded: "warn",
+  resolved_closed: "neutral",
 };
 
 export const RECOMMENDATION_LABEL: Record<"contest" | "refund", string> = {

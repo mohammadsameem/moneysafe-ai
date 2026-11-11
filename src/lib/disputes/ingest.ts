@@ -14,6 +14,8 @@ import type { ActivityMeta } from "@/lib/activity/logger";
 import { getDispute, listDisputes, type PayPalClient } from "@/lib/paypal";
 import { uuidV5 } from "@/seed/ids";
 import { formatIngestedBuyerMessage, mapPayPalReason } from "./paypal-reason";
+import { describeResolution, mapPayPalResolution } from "./paypal-resolution";
+import type { DisputeResolutionRepo } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** PayPal's inquiry stage lasts up to 20 days; used only when PayPal gives no response-due date. */
@@ -37,6 +39,8 @@ export interface IngestDeps {
   demoMode: boolean;
   now?: () => Date;
   log?: (meta: ActivityMeta) => Promise<void>;
+  /** Lets a sync mark a linked dispute that PayPal closed as resolved. */
+  resolution?: DisputeResolutionRepo;
 }
 
 export interface LinkedDispute {
@@ -53,6 +57,8 @@ export type IngestResult =
       /** PayPal disputes read. */
       checked: number;
       linked: LinkedDispute[];
+      /** Linked disputes that PayPal has closed and that were marked resolved by this run. */
+      closedOnPayPal: number;
       skipped: { resolved: number; unmatched: number; otherSession: number; unsupported: number; failed: number };
     };
 
@@ -84,9 +90,30 @@ export async function ingestPayPalDisputes(sessionId: string, deps: IngestDeps):
   const skipped = { resolved: 0, unmatched: 0, otherSession: 0, unsupported: 0, failed: 0 };
   const linked: LinkedDispute[] = [];
   let checked = 0;
+  let closedNow = 0;
 
   for (const item of items.slice(0, MAX_DISPUTES_READ)) {
     if (item.status === "RESOLVED") {
+      // A dispute this session already linked and PayPal has now closed: record PayPal's outcome (no approval, execution or
+      // learning-loop change). One that was never linked is simply skipped.
+      const mine = await deps.repo.findDisputeByPaypalId(item.dispute_id);
+      if (mine && mine.sessionId === sessionId && deps.resolution) {
+        try {
+          const detail = await getDispute(client, item.dispute_id);
+          const resolved = mapPayPalResolution({ status: detail.status, disputeState: detail.dispute_state, outcomeCode: detail.dispute_outcome?.outcome_code });
+          const updated = await deps.resolution.markResolvedOnPayPal({ id: mine.id, status: resolved.status, outcome: resolved.outcome, note: describeResolution(resolved, detail.dispute_outcome?.outcome_reason) });
+          if (updated) {
+            closedNow++;
+            try {
+              await deps.log?.({ sessionId, refDisputeId: mine.id, stepType: "paypal_api", toolName: "dispute_resolved_on_paypal", inputSummary: "PayPal reports the dispute as closed", outputSummary: `${resolved.paypalOutcome ?? "closed"}; marked ${resolved.status}; no approval, execution or learning-loop change`, durationMs: 0, status: "success" });
+            } catch {
+              /* logging is best effort */
+            }
+          }
+        } catch {
+          skipped.failed++;
+        }
+      }
       skipped.resolved++;
       continue;
     }
@@ -159,6 +186,6 @@ export async function ingestPayPalDisputes(sessionId: string, deps: IngestDeps):
     linked.push({ disputeId: id, paypalDisputeId: item.dispute_id, created });
   }
 
-  await log(`read ${checked} dispute(s); linked ${linked.length} (${linked.filter((l) => l.created).length} new); ${skipped.unmatched} matched none of your orders`, "success");
-  return { kind: "ok", checked, linked, skipped };
+  await log(`read ${checked} dispute(s); linked ${linked.length} (${linked.filter((l) => l.created).length} new); ${closedNow} closed on PayPal; ${skipped.unmatched} matched none of your orders`, "success");
+  return { kind: "ok", checked, linked, closedOnPayPal: closedNow, skipped };
 }

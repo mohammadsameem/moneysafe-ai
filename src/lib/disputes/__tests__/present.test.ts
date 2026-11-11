@@ -15,7 +15,8 @@ import {
 describe("dispute presentation", () => {
   it("labels every reason, status and outcome", () => {
     expect(REASON_LABEL).toEqual({ item_not_received: "Item not received", not_as_described: "Not as described" });
-    expect(Object.keys(STATUS_LABEL).sort()).toEqual(["action_taken", "open", "resolved_lost", "resolved_refunded", "resolved_won"]);
+    expect(Object.keys(STATUS_LABEL).sort()).toEqual(["action_taken", "open", "resolved_closed", "resolved_lost", "resolved_refunded", "resolved_won"]);
+    expect(STATUS_LABEL.resolved_closed).toBe("Resolved on PayPal"); // a real dispute PayPal closed with no refund or win we can name
     expect(OUTCOME_LABEL).toEqual({ won: "Won", lost: "Lost", refunded: "Refunded" });
   });
 

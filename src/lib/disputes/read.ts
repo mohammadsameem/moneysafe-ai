@@ -13,9 +13,10 @@ import { demoCopyId } from "@/lib/demo/ids";
 import { isAnalysed } from "./analysis-state";
 import { computeDeadline } from "./deadline";
 import { allowedActions, isRealDispute, type LiveDisputeInfo } from "./paypal-reason";
-import type { DisputeRecord, DisputesReadRepo } from "./types";
+import { describeResolution, isClosedOnPayPal, mapPayPalResolution } from "./paypal-resolution";
+import type { DisputeRecord, DisputeResolutionRepo, DisputesReadRepo } from "./types";
 
-export const RESOLVED_STATUSES = ["resolved_won", "resolved_lost", "resolved_refunded"] as const;
+export const RESOLVED_STATUSES = ["resolved_won", "resolved_lost", "resolved_refunded", "resolved_closed"] as const;
 
 export function isResolvedStatus(status: Dispute["status"]): boolean {
   return (RESOLVED_STATUSES as readonly string[]).includes(status);
@@ -113,6 +114,8 @@ export interface DisputeReadDeps {
   demoMode: boolean;
   now?: () => Date;
   log?: (meta: ActivityMeta) => Promise<void>;
+  /** Present in production: lets a page read mark a dispute that PayPal closed as resolved. */
+  resolution?: DisputeResolutionRepo;
 }
 
 /** A deadline from PayPal for a live-linked dispute, or null to keep the stored one. */
@@ -179,10 +182,48 @@ export async function readLiveDispute(record: DisputeRecord, sessionId: string, 
       dueDate: live.seller_response_due_date && !Number.isNaN(Date.parse(live.seller_response_due_date)) ? new Date(live.seller_response_due_date).toISOString() : null,
       allowed: allowedActions(live.allowed_response_options),
       readFailed: null,
+      outcomeCode: live.dispute_outcome?.outcome_code ?? null,
+      outcomeReason: live.dispute_outcome?.outcome_reason ?? null,
     };
   } catch {
     return { ...empty, readFailed: "PayPal could not be read right now." };
   }
+}
+
+/**
+ * If PayPal has closed this REAL dispute, mark the local record resolved with PayPal's outcome and return the updated
+ * record. Creates NO approval, execution or learning-loop row. Returns null when there is nothing to do.
+ */
+export async function applyPayPalResolution(
+  record: DisputeRecord,
+  live: LiveDisputeInfo | null,
+  sessionId: string,
+  deps: { resolution?: DisputeResolutionRepo; log?: (meta: ActivityMeta) => Promise<void> },
+): Promise<DisputeRecord | null> {
+  const { dispute } = record;
+  if (!live || live.readFailed || !deps.resolution || !isRealDispute(dispute) || isResolvedStatus(dispute.status)) return null;
+  if (!isClosedOnPayPal({ status: live.status, disputeState: live.state, outcomeCode: live.outcomeCode })) return null;
+
+  const resolved = mapPayPalResolution({ status: live.status, disputeState: live.state, outcomeCode: live.outcomeCode });
+  const note = describeResolution(resolved, live.outcomeReason);
+  const updated = await deps.resolution.markResolvedOnPayPal({ id: dispute.id, status: resolved.status, outcome: resolved.outcome, note });
+  if (!updated) return null; // another request got there first
+  try {
+    await deps.log?.({
+      sessionId,
+      refDisputeId: dispute.id,
+      refOrderId: dispute.orderId,
+      stepType: "paypal_api",
+      toolName: "dispute_resolved_on_paypal",
+      inputSummary: "PayPal reports the dispute as closed",
+      outputSummary: `${resolved.paypalOutcome ?? live.status ?? "closed"}${live.outcomeReason ? ` / ${live.outcomeReason}` : ""}; marked ${resolved.status}; no approval, execution or learning-loop change`,
+      durationMs: 0,
+      status: "success",
+    });
+  } catch {
+    /* logging is best effort */
+  }
+  return { dispute: updated, order: record.order };
 }
 
 export type DisputeTab = "open" | "resolved";

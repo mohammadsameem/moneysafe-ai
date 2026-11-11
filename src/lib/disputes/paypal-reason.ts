@@ -77,6 +77,9 @@ export interface LiveDisputeInfo {
   allowed: DisputeActionType[];
   /** Set when PayPal could not be read or must not be contacted: no write is offered then. */
   readFailed: string | null;
+  /** PayPal's `dispute_outcome` once the dispute is closed there (e.g. RESOLVED_BUYER_FAVOUR / SELLER_ISSUED_REFUND). */
+  outcomeCode?: string | null;
+  outcomeReason?: string | null;
 }
 
 const ACTION_LABEL: Record<DisputeActionType, string> = { submit_evidence: "submit evidence", accept_claim: "accept the claim (refund)" };

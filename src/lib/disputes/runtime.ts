@@ -10,7 +10,7 @@ import type { DisputeReadDeps } from "./read";
 import { buildOutcomeHook } from "@/lib/insights/runtime";
 import type { IngestDeps } from "./ingest";
 import { createLiveGate } from "./live-gate";
-import { createDrizzleDisputesRepo, createDrizzleIngestRepo, createDrizzleSimulationRepo } from "./repo";
+import { createDrizzleDisputesRepo, createDrizzleIngestRepo, createDrizzleResolutionRepo, createDrizzleSimulationRepo } from "./repo";
 import type { SimulationDeps } from "./simulate";
 
 export function buildReadDeps(): DisputeReadDeps {
@@ -19,6 +19,7 @@ export function buildReadDeps(): DisputeReadDeps {
     paypal: getPayPalClient(),
     demoMode: isDemoModeEnabled(),
     log: logActivity,
+    resolution: createDrizzleResolutionRepo(),
   };
 }
 
@@ -28,6 +29,7 @@ export function buildDetailDeps(): DetailDeps {
     paypal: getPayPalClient(),
     demoMode: isDemoModeEnabled(),
     log: logActivity,
+    resolution: createDrizzleResolutionRepo(),
   };
 }
 
@@ -48,7 +50,7 @@ export function buildApproveDeps(): ApproveDeps {
 }
 
 export function buildIngestDeps(): IngestDeps {
-  return { repo: createDrizzleIngestRepo(), paypal: getPayPalClient(), demoMode: isDemoModeEnabled(), log: logActivity };
+  return { repo: createDrizzleIngestRepo(), paypal: getPayPalClient(), demoMode: isDemoModeEnabled(), log: logActivity, resolution: createDrizzleResolutionRepo() };
 }
 
 export function buildSimulationDeps(): SimulationDeps {
