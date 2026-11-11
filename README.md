@@ -4,8 +4,7 @@
 
 MoneySafe AI scores each PayPal order for chargeback risk with explainable rule-based signals, and helps a small seller decide whether to contest or refund a dispute. An LLM writes the plain-language explanation and the draft messages; it never sets a score and never sends anything. Every action that would reach PayPal waits for the merchant's explicit approval.
 
-- **Live demo:** `https://<your-app>.vercel.app` _(placeholder: add the production URL after the Vercel deploy, see [DEPLOY.md](DEPLOY.md))_
-- **Devpost:** `<link to the Devpost submission>` _(placeholder)_
+- **Live demo:** `https://moneysafe-ai.vercel.app` _(placeholder: add the production URL after the Vercel deploy, see [DEPLOY.md](DEPLOY.md))_
 - **Demo video:** `<link to the walkthrough video>` _(placeholder)_
 
 ## Try it
@@ -122,4 +121,4 @@ Next.js 14, React 18, TypeScript, Tailwind CSS 3, Drizzle ORM, PostgreSQL (Supab
 
 ## Licence
 
-Hackathon project. No licence has been chosen yet.
+MIT
