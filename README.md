@@ -5,7 +5,7 @@
 MoneySafe AI scores each PayPal order for chargeback risk with explainable, rule-based signals, and helps a small seller decide whether to contest or refund a dispute. An LLM writes the plain-language explanations and draft messages; it never sets a score and never sends anything. Every action that would reach PayPal waits for the merchant's explicit approval.
 
 - **Live demo:** https://moneysafe-ai.vercel.app
-- **Demo video:** `https://youtu.be/yLPY8kPuOhI?si=ulhbAyoq02Xtb9Fl`
+- **Demo video:** https://youtu.be/yLPY8kPuOhI?si=ulhbAyoq02Xtb9Fl
 
 ## Try it in 60 seconds
 
