@@ -2,7 +2,9 @@
 
 **The risk desk for micro-merchants.**
 
-<img width="254" height="254" alt="MoneySafe AI Hooded Mascot Logo" src="https://github.com/user-attachments/assets/7221a6e5-5bbd-4ab2-886d-79dcc112c05c" />
+<p align="center">
+  <img width="254" height="254" alt="MoneySafe AI Hooded Mascot Logo" src="https://github.com/user-attachments/assets/7221a6e5-5bbd-4ab2-886d-79dcc112c05c" />
+</p>
 
 MoneySafe AI scores each PayPal order for chargeback risk with explainable, rule-based signals, and helps a small seller decide whether to contest or refund a dispute. An LLM writes the plain-language explanations and draft messages; it never sets a score and never sends anything. Every action that would reach PayPal waits for the merchant's explicit approval.
 
